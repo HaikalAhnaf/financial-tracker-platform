@@ -3,7 +3,7 @@ name: Serverless CI/CD Pipeline
 on:
   push:
     branches:
-      - main # Triggers the workflow when you push to the main branch
+      - main
 
 jobs:
   deploy:
@@ -41,7 +41,6 @@ jobs:
           ECR_REPOSITORY: financial-tracker-backend
           IMAGE_TAG: latest
         run: |
-          # The --provenance=false flag prevents the OCI index error in AWS Lambda
           docker build --provenance=false --platform linux/amd64 -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
