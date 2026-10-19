@@ -2,7 +2,7 @@ import json
 import os
 import boto3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 # Initialize the DynamoDB client
@@ -16,15 +16,14 @@ def lambda_handler(event, context):
     http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
     
     try:
-        # 1. Handle the CORS Preflight request
         if http_method == 'OPTIONS':
             return build_response(200, "CORS Preflight OK")
-            
-        # 2. Handle actual requests
         elif http_method == 'POST':
             return create_transaction(event)
         elif http_method == 'GET':
             return get_transactions(event)
+        elif http_method == 'DELETE':
+            return delete_transaction(event)
         else:
             return build_response(400, {"error": f"Unsupported HTTP method: {http_method}"})
             
@@ -33,10 +32,9 @@ def lambda_handler(event, context):
         return build_response(500, {"error": "Internal server error", "details": str(e)})
 
 def create_transaction(event):
-    """Parses JSON, saves transaction, and updates the running balance atomically"""
     body = json.loads(event.get('body', '{}'))
-    
     user_id = "USER#123"
+    
     amount = body.get('amount')
     category = body.get('category', 'Uncategorized')
     txn_type = body.get('type', 'expense')
@@ -44,7 +42,6 @@ def create_transaction(event):
     if not amount:
         return build_response(400, {"error": "Amount is required"})
         
-    # 1. Generate Transaction Item
     date_str = datetime.utcnow().strftime('%Y-%m-%d')
     txn_id = str(uuid.uuid4())[:8]
     sort_key = f"TXN#{date_str}#{txn_id}"
@@ -58,56 +55,95 @@ def create_transaction(event):
         'timestamp': datetime.utcnow().isoformat()
     }
     
-    # 2. Write the transaction
     table.put_item(Item=item)
     
-    # 3. Update the Running Balance using an Atomic Counter
-    # Convert amount to Decimal for DynamoDB math. Negative for expenses.
+    # Update Balance
     numeric_amount = Decimal(str(amount))
     delta = numeric_amount if txn_type == 'income' else -numeric_amount
     
     table.update_item(
-        Key={
-            'PK': user_id,
-            'SK': 'BALANCE'
-        },
+        Key={'PK': user_id, 'SK': 'BALANCE'},
         UpdateExpression="ADD current_balance :delta",
-        ExpressionAttributeValues={
-            ':delta': delta
-        }
+        ExpressionAttributeValues={':delta': delta}
     )
     
-    return build_response(201, {"message": "Transaction created and balance updated", "transaction": item})
+    return build_response(201, {"message": "Transaction created", "transaction": item})
+
+def delete_transaction(event):
+    """Deletes a transaction and perfectly reverses the running balance"""
+    body = json.loads(event.get('body', '{}'))
+    user_id = "USER#123"
+    sk_to_delete = body.get('sk')
+    
+    if not sk_to_delete:
+        return build_response(400, {"error": "Transaction SK is required"})
+        
+    # 1. Fetch the transaction to know how much to refund to the balance
+    response = table.get_item(Key={'PK': user_id, 'SK': sk_to_delete})
+    txn = response.get('Item')
+    
+    if not txn:
+        return build_response(404, {"error": "Transaction not found"})
+        
+    amount = Decimal(str(txn.get('amount', '0')))
+    txn_type = txn.get('type', 'expense')
+    
+    # 2. Delete the transaction record
+    table.delete_item(Key={'PK': user_id, 'SK': sk_to_delete})
+    
+    # 3. Reverse the balance (Deleting an expense ADDS money back, deleting income SUBTRACTS)
+    reverse_delta = amount if txn_type == 'expense' else -amount
+    
+    table.update_item(
+        Key={'PK': user_id, 'SK': 'BALANCE'},
+        UpdateExpression="ADD current_balance :delta",
+        ExpressionAttributeValues={':delta': reverse_delta}
+    )
+    
+    return build_response(200, {"message": "Transaction deleted and balance reverted"})
 
 def get_transactions(event):
-    """Fetches transactions, filtered by month if provided"""
     user_id = "USER#123"
-    
-    # Check for query parameters (e.g., ?month=2026-10)
     query_params = event.get('queryStringParameters') or {}
+    
     month_filter = query_params.get('month')
+    time_range = query_params.get('range')
     
-    # If a month is provided, query only that month. Otherwise, fetch all TXNs.
-    sk_prefix = f"TXN#{month_filter}" if month_filter else "TXN#"
-    
-    # Fetch the transactions
+    # Build efficient DynamoDB Query logic based on what the frontend requests
+    if month_filter:
+        # For the Dashboard: Specific month match
+        sk_condition = "PK = :pk AND begins_with(SK, :sk_val)"
+        sk_val = f"TXN#{month_filter}"
+        
+    elif time_range and time_range != 'all':
+        # For the History Page: Time-range > Start Date
+        now = datetime.utcnow()
+        if time_range == '3m':
+            start_date = now - timedelta(days=90)
+        elif time_range == '6m':
+            start_date = now - timedelta(days=180)
+        elif time_range == '1y':
+            start_date = now - timedelta(days=365)
+        else:
+            start_date = now - timedelta(days=180) # Default to 6m
+            
+        sk_condition = "PK = :pk AND SK >= :sk_val"
+        sk_val = f"TXN#{start_date.strftime('%Y-%m-%d')}"
+        
+    else:
+        # Fallback: Get everything
+        sk_condition = "PK = :pk AND begins_with(SK, :sk_val)"
+        sk_val = "TXN#"
+        
     txn_response = table.query(
-        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_prefix)",
+        KeyConditionExpression=sk_condition,
         ExpressionAttributeValues={
             ":pk": user_id,
-            ":sk_prefix": sk_prefix
+            ":sk_val": sk_val
         }
     )
     
-    # Fetch the running balance
-    balance_response = table.get_item(
-        Key={
-            'PK': user_id,
-            'SK': 'BALANCE'
-        }
-    )
-    
-    # Safely extract the balance (defaults to 0 if the user has no transactions yet)
+    balance_response = table.get_item(Key={'PK': user_id, 'SK': 'BALANCE'})
     current_balance = balance_response.get('Item', {}).get('current_balance', Decimal('0'))
     
     return build_response(200, {
@@ -116,8 +152,6 @@ def get_transactions(event):
     })
 
 def build_response(status_code, body):
-    """Helper function to format the response for API Gateway"""
-    # Convert any stray Decimals to int/float for JSON serialization
     class DecimalEncoder(json.JSONEncoder):
         def default(self, obj):
             if isinstance(obj, Decimal):
