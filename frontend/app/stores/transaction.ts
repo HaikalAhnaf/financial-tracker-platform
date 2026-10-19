@@ -15,38 +15,21 @@ export const useTransactionStore = defineStore("transaction", {
 
     return {
       transactions: [] as Transaction[],
+      serverBalance: 0, // Driven entirely by DynamoDB Atomic Counter
       isLoading: false,
       error: null as string | null,
       selectedMonth: currentMonth,
     };
   },
   getters: {
-    filteredTransactions: (state) => {
-      return state.transactions.filter((t) => {
-        const date = new Date(t.timestamp);
-        const txnMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-        return txnMonth === state.selectedMonth;
-      });
+    totalIncome(state): number {
+      return state.transactions.filter((t: Transaction) => t.type === "income").reduce((sum: number, t: Transaction) => sum + Number(t.amount), 0);
     },
-
-    totalIncome(): number {
-      return this.filteredTransactions
-        .filter((t: Transaction) => t.type === "income")
-        .reduce((sum: number, t: Transaction) => sum + Number(t.amount), 0);
+    totalExpense(state): number {
+      return state.transactions.filter((t: Transaction) => t.type === "expense").reduce((sum: number, t: Transaction) => sum + Number(t.amount), 0);
     },
-
-    totalExpense(): number {
-      return this.filteredTransactions
-        .filter((t: Transaction) => t.type === "expense")
-        .reduce((sum: number, t: Transaction) => sum + Number(t.amount), 0);
-    },
-
-    currentBalance(): number {
-      return this.totalIncome - this.totalExpense;
-    },
-
-    expensesByCategory(): Record<string, number> {
-      const expenses = this.filteredTransactions.filter((t: Transaction) => t.type === "expense");
+    expensesByCategory(state): Record<string, number> {
+      const expenses = state.transactions.filter((t: Transaction) => t.type === "expense");
       return expenses.reduce(
         (acc: Record<string, number>, txn: Transaction) => {
           acc[txn.category] = (acc[txn.category] || 0) + Number(txn.amount);
@@ -55,9 +38,8 @@ export const useTransactionStore = defineStore("transaction", {
         {} as Record<string, number>,
       );
     },
-
-    incomeByCategory(): Record<string, number> {
-      const incomes = this.filteredTransactions.filter((t: Transaction) => t.type === "income");
+    incomeByCategory(state): Record<string, number> {
+      const incomes = state.transactions.filter((t: Transaction) => t.type === "income");
       return incomes.reduce(
         (acc: Record<string, number>, txn: Transaction) => {
           acc[txn.category] = (acc[txn.category] || 0) + Number(txn.amount);
@@ -66,9 +48,8 @@ export const useTransactionStore = defineStore("transaction", {
         {} as Record<string, number>,
       );
     },
-
-    recentTransactions(): Transaction[] {
-      return this.filteredTransactions.slice(0, 5);
+    recentTransactions(state): Transaction[] {
+      return state.transactions.slice(0, 5);
     },
   },
   actions: {
@@ -79,7 +60,10 @@ export const useTransactionStore = defineStore("transaction", {
       this.isLoading = true;
       this.error = null;
       try {
-        const data = await $fetch<{ transactions: Transaction[] }>(apiUrl);
+        // Appends the ?month= query to make DynamoDB highly efficient
+        const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?month=${this.selectedMonth}`);
+
+        this.serverBalance = data.balance || 0;
         this.transactions = (data.transactions || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       } catch (err) {
         this.error = "Error loading transactions.";
@@ -92,11 +76,8 @@ export const useTransactionStore = defineStore("transaction", {
       const apiUrl = config.public.apiUrl as string;
 
       try {
-        await $fetch(apiUrl, {
-          method: "POST",
-          body: newTxn,
-        });
-        await this.fetchTransactions();
+        await $fetch(apiUrl, { method: "POST", body: newTxn });
+        await this.fetchTransactions(); // Fetches updated server balance immediately
       } catch (err) {
         throw new Error("Failed to add transaction");
       }
