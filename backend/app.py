@@ -225,11 +225,14 @@ def build_response(status_code, body):
         def default(self, obj):
             if isinstance(obj, Decimal): return float(obj) if obj % 1 else int(obj)
             return super(DecimalEncoder, self).default(obj)
+    
     return {
         "statusCode": status_code,
         "headers": {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*"
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Methods": "OPTIONS,POST,GET,PUT,DELETE"
         },
         "body": json.dumps(body, cls=DecimalEncoder)
     }
