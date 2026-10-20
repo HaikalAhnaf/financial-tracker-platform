@@ -7,57 +7,132 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 dynamodb = boto3.resource('dynamodb')
+ses = boto3.client('ses', region_name=os.environ.get('AWS_REGION', 'ap-southeast-1'))
 table_name = os.environ.get('DYNAMODB_TABLE', 'FinancialTracker')
 table = dynamodb.Table(table_name)
 
+# Ensure this matches your verified SES sender email
+SENDER_EMAIL = "your-verified-email@gmail.com" 
+
 def extract_user_id(event):
-    """Safely decodes the Cognito JWT to use the user's email as the DynamoDB Partition Key"""
     headers = {k.lower(): v for k, v in event.get('headers', {}).items()}
     auth_header = headers.get('authorization', '')
-    
-    if not auth_header.startswith('Bearer '):
-        raise ValueError("Missing or invalid Authorization header")
-        
+    if not auth_header.startswith('Bearer '): raise ValueError("Missing Auth header")
     token = auth_header.split(' ')[1]
     payload_part = token.split('.')[1]
-    # Add base64 padding if necessary
     payload_part += '=' * ((4 - len(payload_part) % 4) % 4)
     decoded = json.loads(base64.urlsafe_b64decode(payload_part).decode('utf-8'))
-    
     email = decoded.get('email')
-    if not email:
-        raise ValueError("Token does not contain an email")
-        
-    return f"USER#{email}"
+    if not email: raise ValueError("Invalid token")
+    return f"USER#{email}", email
 
 def lambda_handler(event, context):
     print("Received event:", json.dumps(event))
+    
+    # Check if triggered automatically by EventBridge
+    if event.get('source') == 'aws.events':
+        return process_automated_reports()
+
     http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
     
     try:
         if http_method == 'OPTIONS':
             return build_response(200, "CORS Preflight OK")
             
-        user_id = extract_user_id(event)
+        user_id, user_email = extract_user_id(event)
         query_params = event.get('queryStringParameters') or {}
-        is_category = query_params.get('entity') == 'category'
+        entity = query_params.get('entity')
         
-        if http_method == 'POST':
-            return create_category(event, user_id) if is_category else create_transaction(event, user_id)
-        elif http_method == 'GET':
-            return get_categories(user_id) if is_category else get_transactions(event, user_id)
-        elif http_method == 'DELETE':
-            return delete_category(event, user_id) if is_category else delete_transaction(event, user_id)
-        elif http_method == 'PUT' and not is_category:
-            return update_transaction_note(event, user_id)
+        if entity == 'settings':
+            if http_method == 'GET': return get_settings(user_id)
+            if http_method == 'POST': return save_settings(event, user_id)
+        elif entity == 'report' and http_method == 'POST':
+            return generate_and_send_report(user_id, user_email)
+        elif entity == 'category':
+            if http_method == 'POST': return create_category(event, user_id)
+            if http_method == 'GET': return get_categories(user_id)
+            if http_method == 'DELETE': return delete_category(event, user_id)
         else:
-            return build_response(400, {"error": f"Unsupported method/entity combination"})
+            if http_method == 'POST': return create_transaction(event, user_id)
+            if http_method == 'GET': return get_transactions(event, user_id)
+            if http_method == 'DELETE': return delete_transaction(event, user_id)
+            if http_method == 'PUT': return update_transaction_note(event, user_id)
+            
+        return build_response(400, {"error": "Unsupported method/entity combination"})
             
     except ValueError as ve:
         return build_response(401, {"error": "Unauthorized", "details": str(ve)})
     except Exception as e:
         print("Error:", str(e))
         return build_response(500, {"error": "Internal server error", "details": str(e)})
+
+# ==========================================
+# REPORTING LOGIC
+# ==========================================
+def get_settings(user_id):
+    response = table.get_item(Key={'PK': user_id, 'SK': 'SETTINGS'})
+    settings = response.get('Item', {'reports_enabled': False, 'report_emails': []})
+    return build_response(200, {"settings": settings})
+
+def save_settings(event, user_id):
+    body = json.loads(event.get('body', '{}'))
+    item = {
+        'PK': user_id,
+        'SK': 'SETTINGS',
+        'reports_enabled': body.get('reports_enabled', False),
+        'report_emails': body.get('report_emails', [])
+    }
+    table.put_item(Item=item)
+    return build_response(200, {"message": "Settings saved", "settings": item})
+
+def process_automated_reports():
+    """Scans for all users with reports enabled and sends them."""
+    # Note: For massive scale, use a GSI, but scan is fine for portfolio
+    response = table.scan(FilterExpression="SK = :sk AND reports_enabled = :true", ExpressionAttributeValues={":sk": "SETTINGS", ":true": True})
+    for user_settings in response.get('Items', []):
+        user_id = user_settings['PK']
+        user_email = user_id.split('#')[1]
+        generate_and_send_report(user_id, user_email, is_automated=True)
+    return {"statusCode": 200, "body": "Automated reports processed"}
+
+def generate_and_send_report(user_id, user_email, is_automated=False):
+    response = table.get_item(Key={'PK': user_id, 'SK': 'SETTINGS'})
+    settings = response.get('Item', {})
+    emails_to_send = settings.get('report_emails', [user_email])
+    
+    if not emails_to_send:
+        return build_response(400, {"error": "No email addresses configured."})
+
+    # Fetch this month's transactions
+    month_str = datetime.utcnow().strftime('%Y-%m')
+    txn_response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_val)",
+        ExpressionAttributeValues={":pk": user_id, ":sk_val": f"TXN#{month_str}"}
+    )
+    txns = txn_response.get('Items', [])
+    
+    income = sum([Decimal(t['amount']) for t in txns if t['type'] == 'income'])
+    expense = sum([Decimal(t['amount']) for t in txns if t['type'] == 'expense'])
+    net = income - expense
+    
+    subject = f"Your Financial Tracker Report - {month_str}"
+    body_text = f"Monthly Report for {month_str}\n\nTotal Income: Rp {income}\nTotal Expenses: Rp {expense}\nNet Savings: Rp {net}\n\nTotal Transactions: {len(txns)}"
+    
+    try:
+        ses.send_email(
+            Source=SENDER_EMAIL,
+            Destination={'ToAddresses': emails_to_send},
+            Message={
+                'Subject': {'Data': subject},
+                'Body': {'Text': {'Data': body_text}}
+            }
+        )
+        return build_response(200, {"message": "Report sent successfully!"})
+    except Exception as e:
+        print("SES Error:", e)
+        return build_response(500, {"error": "Failed to send email. Verify emails in AWS SES."})
+
+# [Keep your existing create_transaction, update_transaction_note, delete_transaction, get_transactions, create_category, get_categories, delete_category, and build_response functions exactly as they were here]
 
 # ==========================================
 # TRANSACTION LOGIC

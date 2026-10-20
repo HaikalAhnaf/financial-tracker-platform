@@ -227,3 +227,47 @@ output "cognito_client_id" {
   value       = aws_cognito_user_pool_client.nuxt_client.id
   description = "The ID of the Cognito App Client"
 }
+
+# ==========================================
+# AUTOMATED REPORTING (SES & EVENTBRIDGE)
+# ==========================================
+
+# 1. Allow Lambda to send emails using SES
+resource "aws_iam_role_policy" "lambda_ses_policy" {
+  name = "lambda_ses_policy"
+  role = aws_iam_role.lambda_exec.id # Assuming this is your Lambda's IAM role name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action   = ["ses:SendEmail", "ses:SendRawEmail"]
+        Effect   = "Allow"
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# 2. EventBridge Rule: Run at 11:59 PM on the last day of every month
+resource "aws_cloudwatch_event_rule" "monthly_report_rule" {
+  name                = "financial-tracker-monthly-report"
+  description         = "Triggers the monthly financial report generation"
+  schedule_expression = "cron(59 23 L * ? *)"
+}
+
+# 3. Connect EventBridge to your Lambda
+resource "aws_cloudwatch_event_target" "lambda_target" {
+  rule      = aws_cloudwatch_event_rule.monthly_report_rule.name
+  target_id = "TriggerMonthlyReportLambda"
+  arn       = aws_lambda_function.api_lambda.arn # Assuming this is your lambda resource name
+}
+
+# 4. Give EventBridge permission to execute the Lambda
+resource "aws_lambda_permission" "allow_eventbridge" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.api_lambda.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.monthly_report_rule.arn
+}
