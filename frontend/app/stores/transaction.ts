@@ -5,6 +5,7 @@ export interface Transaction {
   category: string;
   amount: number | string;
   type: string;
+  note?: string;
   timestamp: string | number;
 }
 
@@ -15,38 +16,36 @@ export const useTransactionStore = defineStore("transaction", {
 
     return {
       transactions: [] as Transaction[],
-      serverBalance: 0, // Driven entirely by DynamoDB Atomic Counter
+      historyTransactions: [] as Transaction[],
+      serverBalance: 0,
       isLoading: false,
       error: null as string | null,
       selectedMonth: currentMonth,
+      historyRange: "6m",
     };
   },
   getters: {
     totalIncome(state): number {
-      return state.transactions.filter((t: Transaction) => t.type === "income").reduce((sum: number, t: Transaction) => sum + Number(t.amount), 0);
+      return state.transactions.filter((t) => t.type === "income").reduce((sum, t) => sum + Number(t.amount), 0);
     },
     totalExpense(state): number {
-      return state.transactions.filter((t: Transaction) => t.type === "expense").reduce((sum: number, t: Transaction) => sum + Number(t.amount), 0);
+      return state.transactions.filter((t) => t.type === "expense").reduce((sum, t) => sum + Number(t.amount), 0);
     },
     expensesByCategory(state): Record<string, number> {
-      const expenses = state.transactions.filter((t: Transaction) => t.type === "expense");
-      return expenses.reduce(
-        (acc: Record<string, number>, txn: Transaction) => {
+      return state.transactions
+        .filter((t) => t.type === "expense")
+        .reduce((acc: Record<string, number>, txn) => {
           acc[txn.category] = (acc[txn.category] || 0) + Number(txn.amount);
           return acc;
-        },
-        {} as Record<string, number>,
-      );
+        }, {});
     },
     incomeByCategory(state): Record<string, number> {
-      const incomes = state.transactions.filter((t: Transaction) => t.type === "income");
-      return incomes.reduce(
-        (acc: Record<string, number>, txn: Transaction) => {
+      return state.transactions
+        .filter((t) => t.type === "income")
+        .reduce((acc: Record<string, number>, txn) => {
           acc[txn.category] = (acc[txn.category] || 0) + Number(txn.amount);
           return acc;
-        },
-        {} as Record<string, number>,
-      );
+        }, {});
     },
     recentTransactions(state): Transaction[] {
       return state.transactions.slice(0, 5);
@@ -56,13 +55,10 @@ export const useTransactionStore = defineStore("transaction", {
     async fetchTransactions() {
       const config = useRuntimeConfig();
       const apiUrl = config.public.apiUrl as string;
-
       this.isLoading = true;
       this.error = null;
       try {
-        // Appends the ?month= query to make DynamoDB highly efficient
         const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?month=${this.selectedMonth}`);
-
         this.serverBalance = data.balance || 0;
         this.transactions = (data.transactions || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       } catch (err) {
@@ -71,15 +67,50 @@ export const useTransactionStore = defineStore("transaction", {
         this.isLoading = false;
       }
     },
+    async fetchHistory() {
+      const config = useRuntimeConfig();
+      const apiUrl = config.public.apiUrl as string;
+      this.isLoading = true;
+      this.error = null;
+      try {
+        const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?range=${this.historyRange}`);
+        this.serverBalance = data.balance || 0;
+        this.historyTransactions = (data.transactions || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      } catch (err) {
+        this.error = "Error loading history.";
+      } finally {
+        this.isLoading = false;
+      }
+    },
     async addTransaction(newTxn: Partial<Transaction>) {
       const config = useRuntimeConfig();
       const apiUrl = config.public.apiUrl as string;
-
       try {
         await $fetch(apiUrl, { method: "POST", body: newTxn });
-        await this.fetchTransactions(); // Fetches updated server balance immediately
+        await this.fetchTransactions();
       } catch (err) {
         throw new Error("Failed to add transaction");
+      }
+    },
+    async updateNote(sk: string, note: string) {
+      const config = useRuntimeConfig();
+      const apiUrl = config.public.apiUrl as string;
+      try {
+        await $fetch(apiUrl, { method: "PUT", body: { sk, note } });
+        await this.fetchHistory();
+      } catch (err) {
+        throw new Error("Failed to update note");
+      }
+    },
+    async deleteTransaction(sk: string) {
+      const config = useRuntimeConfig();
+      const apiUrl = config.public.apiUrl as string;
+      try {
+        await $fetch(apiUrl, { method: "DELETE", body: { sk } });
+        await this.fetchTransactions();
+        await this.fetchHistory();
+      } catch (err) {
+        throw new Error("Failed to delete transaction");
       }
     },
   },

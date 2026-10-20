@@ -45,10 +45,11 @@
     </div>
 
     <!-- Quick Add Form -->
+    <!-- IN app/pages/index.vue -> Replace ONLY the form section -->
     <div class="bg-white rounded-2xl p-6 shadow-sm border border-darkpurple/10">
       <h3 class="text-lg font-bold tracking-tight text-darkpurple-dark mb-4">Quick Add Transaction</h3>
 
-      <form @submit.prevent="submitTransaction" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+      <form @submit.prevent="submitTransaction" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
         <div>
           <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Category</label>
           <input
@@ -75,6 +76,14 @@
             <option value="expense">Expense</option>
             <option value="income">Income</option>
           </select>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Note</label>
+          <input
+            v-model="newTxn.note"
+            type="text"
+            placeholder="Optional note..."
+            class="w-full bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-darkpurple focus:outline-none" />
         </div>
         <button
           type="submit"
@@ -103,9 +112,8 @@
   const { formatRupiah } = useCurrency();
   const isSubmitting = ref(false);
 
-  const newTxn = ref({ category: "", amount: null, type: "expense" });
+  const newTxn = ref({ category: "", amount: null, type: "expense", note: "" });
 
-  // Auto-trigger API fetch when the user changes the month dropdown
   watch(
     () => store.selectedMonth,
     () => {
@@ -119,7 +127,8 @@
     for (let i = 0; i < 6; i++) {
       const d = new Date(date.getFullYear(), date.getMonth() - i, 1);
       const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const label = d.toLocaleDateString("id-ID", { month: "long", year: "numeric" });
+      // Changed 'id-ID' to 'en-US'
+      const label = d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
       options.push({ value, label });
     }
     return options;
@@ -139,7 +148,7 @@
     try {
       const payload = { ...newTxn.value, timestamp: new Date().toISOString() };
       await store.addTransaction(payload);
-      newTxn.value = { category: "", amount: null, type: "expense" };
+      newTxn.value = { category: "", amount: null, type: "expense", note: "" };
     } catch (err) {
       alert("Failed to add transaction");
     } finally {

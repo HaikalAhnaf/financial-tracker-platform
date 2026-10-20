@@ -7,6 +7,7 @@
       </div>
       <div class="flex gap-6">
         <NuxtLink to="/" class="text-darkpurple-light hover:text-darkpurple font-semibold transition-colors">Dashboard</NuxtLink>
+        <NuxtLink to="/history" class="text-darkpurple-light hover:text-darkpurple font-semibold transition-colors">History</NuxtLink>
         <NuxtLink to="/settings" class="text-darkpurple-light hover:text-darkpurple font-semibold transition-colors">Settings</NuxtLink>
       </div>
     </nav>
