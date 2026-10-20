@@ -11,9 +11,6 @@ ses = boto3.client('ses', region_name=os.environ.get('AWS_REGION', 'ap-southeast
 table_name = os.environ.get('DYNAMODB_TABLE', 'FinancialTracker')
 table = dynamodb.Table(table_name)
 
-# Ensure this matches your verified SES sender email
-SENDER_EMAIL = "your-verified-email@gmail.com" 
-
 def extract_user_id(event):
     headers = {k.lower(): v for k, v in event.get('headers', {}).items()}
     auth_header = headers.get('authorization', '')
@@ -119,8 +116,9 @@ def generate_and_send_report(user_id, user_email, is_automated=False):
     body_text = f"Monthly Report for {month_str}\n\nTotal Income: Rp {income}\nTotal Expenses: Rp {expense}\nNet Savings: Rp {net}\n\nTotal Transactions: {len(txns)}"
     
     try:
+        # Dynamically use the verified user_email as the Source sender
         ses.send_email(
-            Source=SENDER_EMAIL,
+            Source=user_email,
             Destination={'ToAddresses': emails_to_send},
             Message={
                 'Subject': {'Data': subject},
@@ -130,7 +128,7 @@ def generate_and_send_report(user_id, user_email, is_automated=False):
         return build_response(200, {"message": "Report sent successfully!"})
     except Exception as e:
         print("SES Error:", e)
-        return build_response(500, {"error": "Failed to send email. Verify emails in AWS SES."})
+        return build_response(500, {"error": "Failed to send email. Verify emails in AWS SES.", "details": str(e)})
 
 # [Keep your existing create_transaction, update_transaction_note, delete_transaction, get_transactions, create_category, get_categories, delete_category, and build_response functions exactly as they were here]
 
