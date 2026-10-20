@@ -235,7 +235,7 @@ output "cognito_client_id" {
 # 1. Allow Lambda to send emails using SES
 resource "aws_iam_role_policy" "lambda_ses_policy" {
   name = "lambda_ses_policy"
-  role = aws_iam_role.lambda_exec.id # Assuming this is your Lambda's IAM role name
+  role = aws_iam_role.lambda_exec_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -260,14 +260,14 @@ resource "aws_cloudwatch_event_rule" "monthly_report_rule" {
 resource "aws_cloudwatch_event_target" "lambda_target" {
   rule      = aws_cloudwatch_event_rule.monthly_report_rule.name
   target_id = "TriggerMonthlyReportLambda"
-  arn       = aws_lambda_function.api_lambda.arn # Assuming this is your lambda resource name
+  arn       = aws_lambda_function.api_backend.arn
 }
 
 # 4. Give EventBridge permission to execute the Lambda
 resource "aws_lambda_permission" "allow_eventbridge" {
   statement_id  = "AllowExecutionFromEventBridge"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.api_lambda.function_name
+  function_name = aws_lambda_function.api_backend.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.monthly_report_rule.arn
 }
