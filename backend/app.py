@@ -92,6 +92,12 @@ def process_automated_reports():
         generate_and_send_report(user_id, user_email, is_automated=True)
     return {"statusCode": 200, "body": "Automated reports processed"}
 
+# backend/app.py
+
+# Verified domain sender signature
+# Set your domain sender with a custom display name
+SENDER_EMAIL = "Financial Tracker <no-reply@haikalahnaf.my.id>"
+
 def generate_and_send_report(user_id, user_email, is_automated=False):
     response = table.get_item(Key={'PK': user_id, 'SK': 'SETTINGS'})
     settings = response.get('Item', {})
@@ -116,9 +122,8 @@ def generate_and_send_report(user_id, user_email, is_automated=False):
     body_text = f"Monthly Report for {month_str}\n\nTotal Income: Rp {income}\nTotal Expenses: Rp {expense}\nNet Savings: Rp {net}\n\nTotal Transactions: {len(txns)}"
     
     try:
-        # Dynamically use the verified user_email as the Source sender
         ses.send_email(
-            Source=user_email,
+            Source=SENDER_EMAIL,
             Destination={'ToAddresses': emails_to_send},
             Message={
                 'Subject': {'Data': subject},
@@ -128,8 +133,7 @@ def generate_and_send_report(user_id, user_email, is_automated=False):
         return build_response(200, {"message": "Report sent successfully!"})
     except Exception as e:
         print("SES Error:", e)
-        return build_response(500, {"error": "Failed to send email. Verify emails in AWS SES.", "details": str(e)})
-
+        return build_response(500, {"error": "Failed to send email.", "details": str(e)})
 # [Keep your existing create_transaction, update_transaction_note, delete_transaction, get_transactions, create_category, get_categories, delete_category, and build_response functions exactly as they were here]
 
 # ==========================================
