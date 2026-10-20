@@ -5,14 +5,12 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-# Initialize the DynamoDB client
 dynamodb = boto3.resource('dynamodb')
 table_name = os.environ.get('DYNAMODB_TABLE', 'FinancialTracker')
 table = dynamodb.Table(table_name)
 
 def lambda_handler(event, context):
     print("Received event:", json.dumps(event))
-    
     http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
     
     try:
@@ -24,6 +22,8 @@ def lambda_handler(event, context):
             return get_transactions(event)
         elif http_method == 'DELETE':
             return delete_transaction(event)
+        elif http_method == 'PUT':
+            return update_transaction_note(event)
         else:
             return build_response(400, {"error": f"Unsupported HTTP method: {http_method}"})
             
@@ -38,6 +38,7 @@ def create_transaction(event):
     amount = body.get('amount')
     category = body.get('category', 'Uncategorized')
     txn_type = body.get('type', 'expense')
+    note = body.get('note', '')
     
     if not amount:
         return build_response(400, {"error": "Amount is required"})
@@ -52,12 +53,12 @@ def create_transaction(event):
         'amount': str(amount),
         'category': category,
         'type': txn_type,
+        'note': note,
         'timestamp': datetime.utcnow().isoformat()
     }
     
     table.put_item(Item=item)
     
-    # Update Balance
     numeric_amount = Decimal(str(amount))
     delta = numeric_amount if txn_type == 'income' else -numeric_amount
     
@@ -69,8 +70,25 @@ def create_transaction(event):
     
     return build_response(201, {"message": "Transaction created", "transaction": item})
 
+def update_transaction_note(event):
+    """Updates only the note field of a specific transaction"""
+    body = json.loads(event.get('body', '{}'))
+    user_id = "USER#123"
+    sk = body.get('sk')
+    note = body.get('note', '')
+    
+    if not sk:
+        return build_response(400, {"error": "Transaction SK is required"})
+        
+    table.update_item(
+        Key={'PK': user_id, 'SK': sk},
+        UpdateExpression="SET note = :note",
+        ExpressionAttributeValues={':note': note}
+    )
+    
+    return build_response(200, {"message": "Note updated successfully"})
+
 def delete_transaction(event):
-    """Deletes a transaction and perfectly reverses the running balance"""
     body = json.loads(event.get('body', '{}'))
     user_id = "USER#123"
     sk_to_delete = body.get('sk')
@@ -78,7 +96,6 @@ def delete_transaction(event):
     if not sk_to_delete:
         return build_response(400, {"error": "Transaction SK is required"})
         
-    # 1. Fetch the transaction to know how much to refund to the balance
     response = table.get_item(Key={'PK': user_id, 'SK': sk_to_delete})
     txn = response.get('Item')
     
@@ -88,19 +105,16 @@ def delete_transaction(event):
     amount = Decimal(str(txn.get('amount', '0')))
     txn_type = txn.get('type', 'expense')
     
-    # 2. Delete the transaction record
     table.delete_item(Key={'PK': user_id, 'SK': sk_to_delete})
     
-    # 3. Reverse the balance (Deleting an expense ADDS money back, deleting income SUBTRACTS)
     reverse_delta = amount if txn_type == 'expense' else -amount
-    
     table.update_item(
         Key={'PK': user_id, 'SK': 'BALANCE'},
         UpdateExpression="ADD current_balance :delta",
         ExpressionAttributeValues={':delta': reverse_delta}
     )
     
-    return build_response(200, {"message": "Transaction deleted and balance reverted"})
+    return build_response(200, {"message": "Transaction deleted"})
 
 def get_transactions(event):
     user_id = "USER#123"
@@ -109,14 +123,10 @@ def get_transactions(event):
     month_filter = query_params.get('month')
     time_range = query_params.get('range')
     
-    # Build efficient DynamoDB Query logic based on what the frontend requests
     if month_filter:
-        # For the Dashboard: Specific month match
         sk_condition = "PK = :pk AND begins_with(SK, :sk_val)"
         sk_val = f"TXN#{month_filter}"
-        
     elif time_range and time_range != 'all':
-        # For the History Page: Time-range > Start Date
         now = datetime.utcnow()
         if time_range == '3m':
             start_date = now - timedelta(days=90)
@@ -125,22 +135,17 @@ def get_transactions(event):
         elif time_range == '1y':
             start_date = now - timedelta(days=365)
         else:
-            start_date = now - timedelta(days=180) # Default to 6m
+            start_date = now - timedelta(days=180)
             
         sk_condition = "PK = :pk AND SK >= :sk_val"
         sk_val = f"TXN#{start_date.strftime('%Y-%m-%d')}"
-        
     else:
-        # Fallback: Get everything
         sk_condition = "PK = :pk AND begins_with(SK, :sk_val)"
         sk_val = "TXN#"
         
     txn_response = table.query(
         KeyConditionExpression=sk_condition,
-        ExpressionAttributeValues={
-            ":pk": user_id,
-            ":sk_val": sk_val
-        }
+        ExpressionAttributeValues={":pk": user_id, ":sk_val": sk_val}
     )
     
     balance_response = table.get_item(Key={'PK': user_id, 'SK': 'BALANCE'})
