@@ -26,18 +26,15 @@
 
     <!-- Summary KPI Cards -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-      <!-- Total Account Balance (Driven by Backend) -->
       <div class="bg-darkpurple p-6 rounded-2xl shadow-lg relative overflow-hidden">
         <div class="absolute -right-4 -top-4 w-24 h-24 bg-white/5 rounded-full blur-2xl"></div>
         <span class="text-xs font-bold tracking-wider uppercase text-white/60 mb-2 block">Total Account Balance</span>
         <h3 class="text-3xl font-extrabold text-white tracking-tight">{{ formatRupiah(store.serverBalance) }}</h3>
       </div>
-
       <div class="bg-white p-6 rounded-2xl shadow-sm border border-darkpurple/5 hover:border-darkpurple/20 transition-colors">
         <span class="text-xs font-bold tracking-wider uppercase text-darkpurple-light mb-2 block">{{ currentMonthLabel }} Income</span>
         <h3 class="text-3xl font-extrabold text-emerald-600 tracking-tight">+ {{ formatRupiah(store.totalIncome) }}</h3>
       </div>
-
       <div class="bg-white p-6 rounded-2xl shadow-sm border border-darkpurple/5 hover:border-darkpurple/20 transition-colors">
         <span class="text-xs font-bold tracking-wider uppercase text-darkpurple-light mb-2 block">{{ currentMonthLabel }} Expenses</span>
         <h3 class="text-3xl font-extrabold text-rose-600 tracking-tight">- {{ formatRupiah(store.totalExpense) }}</h3>
@@ -45,20 +42,35 @@
     </div>
 
     <!-- Quick Add Form -->
-    <!-- IN app/pages/index.vue -> Replace ONLY the form section -->
     <div class="bg-white rounded-2xl p-6 shadow-sm border border-darkpurple/10">
       <h3 class="text-lg font-bold tracking-tight text-darkpurple-dark mb-4">Quick Add Transaction</h3>
 
       <form @submit.prevent="submitTransaction" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
         <div>
-          <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Category</label>
-          <input
-            v-model="newTxn.category"
-            type="text"
-            required
-            placeholder="e.g. Food"
-            class="w-full bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-darkpurple focus:outline-none" />
+          <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Type</label>
+          <select
+            v-model="newTxn.type"
+            @change="newTxn.category = ''"
+            class="w-full bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-darkpurple focus:outline-none cursor-pointer">
+            <option value="expense">Expense</option>
+            <option value="income">Income</option>
+          </select>
         </div>
+
+        <!-- Dynamic Category Selector -->
+        <div>
+          <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Category</label>
+          <select
+            v-model="newTxn.category"
+            required
+            class="w-full bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-darkpurple focus:outline-none cursor-pointer">
+            <option value="" disabled>Select category</option>
+            <option v-for="cat in availableCategories" :key="cat.SK" :value="cat.name">
+              {{ cat.name }}
+            </option>
+          </select>
+        </div>
+
         <div>
           <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Amount (Rp)</label>
           <input
@@ -67,15 +79,6 @@
             required
             placeholder="50000"
             class="w-full bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-darkpurple focus:outline-none" />
-        </div>
-        <div>
-          <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Type</label>
-          <select
-            v-model="newTxn.type"
-            class="w-full bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-darkpurple focus:outline-none cursor-pointer">
-            <option value="expense">Expense</option>
-            <option value="income">Income</option>
-          </select>
         </div>
         <div>
           <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Note</label>
@@ -105,14 +108,21 @@
 <script setup>
   import { ref, computed, onMounted, watch } from "vue";
   import { useTransactionStore } from "~/stores/transaction";
+  import { useCategoryStore } from "~/stores/category";
   import { useCurrency } from "~/composables/useCurrency";
   import CategoryChart from "~/components/CategoryChart.vue";
 
   const store = useTransactionStore();
+  const categoryStore = useCategoryStore();
   const { formatRupiah } = useCurrency();
   const isSubmitting = ref(false);
 
   const newTxn = ref({ category: "", amount: null, type: "expense", note: "" });
+
+  // Automatically filter categories based on the selected type
+  const availableCategories = computed(() => {
+    return newTxn.value.type === "expense" ? categoryStore.expenseCategories : categoryStore.incomeCategories;
+  });
 
   watch(
     () => store.selectedMonth,
@@ -127,7 +137,6 @@
     for (let i = 0; i < 6; i++) {
       const d = new Date(date.getFullYear(), date.getMonth() - i, 1);
       const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      // Changed 'id-ID' to 'en-US'
       const label = d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
       options.push({ value, label });
     }
@@ -141,6 +150,7 @@
 
   onMounted(() => {
     store.fetchTransactions();
+    categoryStore.fetchCategories();
   });
 
   async function submitTransaction() {

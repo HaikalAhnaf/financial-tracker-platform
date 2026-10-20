@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { useAuthStore } from "./auth";
 
 export interface Transaction {
   SK?: string;
@@ -55,10 +56,17 @@ export const useTransactionStore = defineStore("transaction", {
     async fetchTransactions() {
       const config = useRuntimeConfig();
       const apiUrl = config.public.apiUrl as string;
+      const authStore = useAuthStore();
+
       this.isLoading = true;
       this.error = null;
       try {
-        const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?month=${this.selectedMonth}`);
+        const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?month=${this.selectedMonth}`, {
+          headers: {
+            Authorization: `Bearer ${authStore.token}`,
+          },
+        });
+
         this.serverBalance = data.balance || 0;
         this.transactions = (data.transactions || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       } catch (err) {
@@ -70,10 +78,16 @@ export const useTransactionStore = defineStore("transaction", {
     async fetchHistory() {
       const config = useRuntimeConfig();
       const apiUrl = config.public.apiUrl as string;
+      const authStore = useAuthStore();
+
       this.isLoading = true;
       this.error = null;
       try {
-        const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?range=${this.historyRange}`);
+        const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?range=${this.historyRange}`, {
+          headers: {
+            Authorization: `Bearer ${authStore.token}`,
+          },
+        });
         this.serverBalance = data.balance || 0;
         this.historyTransactions = (data.transactions || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       } catch (err) {
@@ -85,8 +99,14 @@ export const useTransactionStore = defineStore("transaction", {
     async addTransaction(newTxn: Partial<Transaction>) {
       const config = useRuntimeConfig();
       const apiUrl = config.public.apiUrl as string;
+      const authStore = useAuthStore();
+
       try {
-        await $fetch(apiUrl, { method: "POST", body: newTxn });
+        await $fetch(apiUrl, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${authStore.token}` },
+          body: newTxn,
+        });
         await this.fetchTransactions();
       } catch (err) {
         throw new Error("Failed to add transaction");
@@ -95,8 +115,14 @@ export const useTransactionStore = defineStore("transaction", {
     async updateNote(sk: string, note: string) {
       const config = useRuntimeConfig();
       const apiUrl = config.public.apiUrl as string;
+      const authStore = useAuthStore();
+
       try {
-        await $fetch(apiUrl, { method: "PUT", body: { sk, note } });
+        await $fetch(apiUrl, {
+          method: "PUT",
+          headers: { Authorization: `Bearer ${authStore.token}` },
+          body: { sk, note },
+        });
         await this.fetchHistory();
       } catch (err) {
         throw new Error("Failed to update note");
@@ -105,8 +131,14 @@ export const useTransactionStore = defineStore("transaction", {
     async deleteTransaction(sk: string) {
       const config = useRuntimeConfig();
       const apiUrl = config.public.apiUrl as string;
+      const authStore = useAuthStore();
+
       try {
-        await $fetch(apiUrl, { method: "DELETE", body: { sk } });
+        await $fetch(apiUrl, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${authStore.token}` },
+          body: { sk },
+        });
         await this.fetchTransactions();
         await this.fetchHistory();
       } catch (err) {

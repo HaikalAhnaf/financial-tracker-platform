@@ -4,8 +4,9 @@ export default defineNuxtConfig({
   modules: ["@nuxtjs/tailwindcss", "@pinia/nuxt"],
   runtimeConfig: {
     public: {
-      // Maps process.env.API from your frontend/.env file
       apiUrl: process.env.API || "",
+      cognitoUserPoolId: process.env.COGNITO_USER_POOL_ID || "",
+      cognitoClientId: process.env.COGNITO_CLIENT_ID || "",
     },
   },
   vite: {
