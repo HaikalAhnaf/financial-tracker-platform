@@ -168,3 +168,62 @@ output "api_endpoint" {
   value       = aws_apigatewayv2_api.http_api.api_endpoint
   description = "The public URL for your Financial Tracker API"
 }
+
+# ==========================================
+# AWS COGNITO AUTHENTICATION
+# ==========================================
+
+resource "aws_cognito_user_pool" "users" {
+  name = "financial-tracker-users"
+
+  # Allow users to sign up and log in with their email
+  alias_attributes         = ["email"]
+  auto_verified_attributes = ["email"]
+
+  password_policy {
+    minimum_length    = 8
+    require_lowercase = true
+    require_numbers   = true
+    require_symbols   = true
+    require_uppercase = true
+  }
+
+  # Ensure the email attribute is required
+  schema {
+    attribute_data_type = "String"
+    name                = "email"
+    required            = true
+    mutable             = true
+  }
+
+  tags = {
+    Environment = "Dev"
+    Project     = "FinancialTracker"
+  }
+}
+
+# Create an App Client for the Nuxt 4 Frontend
+resource "aws_cognito_user_pool_client" "nuxt_client" {
+  name         = "financial-tracker-nuxt-client"
+  user_pool_id = aws_cognito_user_pool.users.id
+
+  # Must be false for Single Page Applications (SPAs) like Vue/Nuxt
+  generate_secret = false
+
+  explicit_auth_flows = [
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH",
+    "ALLOW_USER_PASSWORD_AUTH"
+  ]
+}
+
+# Output the IDs so we can copy them into our Nuxt .env file later
+output "cognito_user_pool_id" {
+  value       = aws_cognito_user_pool.users.id
+  description = "The ID of the Cognito User Pool"
+}
+
+output "cognito_client_id" {
+  value       = aws_cognito_user_pool_client.nuxt_client.id
+  description = "The ID of the Cognito App Client"
+}
