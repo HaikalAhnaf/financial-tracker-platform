@@ -17,7 +17,6 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # NEW: We rename the environments to bypass the locked AWS resources
       - name: Determine Environment & Version Tag
         id: vars
         run: |
@@ -42,20 +41,14 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Init & Apply
-        id: tf
+      # STEP 1: Initialize isolated state and build ONLY the ECR repo first
+      - name: Provision ECR Repository
         working-directory: ./terraform
         run: |
-          # Isolate state files using the new environment names
           terraform init -backend-config="key=environments/${{ env.ENV }}/terraform.tfstate" -reconfigure
-          terraform apply -auto-approve -var="environment=${{ env.ENV }}"
+          terraform apply -auto-approve -target=aws_ecr_repository.backend_api -var="environment=${{ env.ENV }}"
 
-          echo "API_URL=$(terraform output -raw api_endpoint)" >> $GITHUB_ENV
-          echo "COGNITO_POOL_ID=$(terraform output -raw cognito_user_pool_id)" >> $GITHUB_ENV
-          echo "COGNITO_CLIENT_ID=$(terraform output -raw cognito_client_id)" >> $GITHUB_ENV
-          echo "S3_BUCKET=$(terraform output -raw s3_bucket_name)" >> $GITHUB_ENV
-          echo "CLOUDFRONT_DIST_ID=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_ENV
-
+      # STEP 2: Authenticate and push the Docker image to the new ECR repo
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
@@ -70,6 +63,19 @@ jobs:
           docker build --provenance=false --platform linux/amd64 -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      # STEP 3: Now that the image exists, build the Lambda and the rest of the infrastructure
+      - name: Full Terraform Apply
+        id: tf
+        working-directory: ./terraform
+        run: |
+          terraform apply -auto-approve -var="environment=${{ env.ENV }}"
+
+          echo "API_URL=$(terraform output -raw api_endpoint)" >> $GITHUB_ENV
+          echo "COGNITO_POOL_ID=$(terraform output -raw cognito_user_pool_id)" >> $GITHUB_ENV
+          echo "COGNITO_CLIENT_ID=$(terraform output -raw cognito_client_id)" >> $GITHUB_ENV
+          echo "S3_BUCKET=$(terraform output -raw s3_bucket_name)" >> $GITHUB_ENV
+          echo "CLOUDFRONT_DIST_ID=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_ENV
 
       - name: Update Lambda Function Code
         env:
