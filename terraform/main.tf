@@ -348,7 +348,7 @@ resource "aws_cloudfront_distribution" "frontend_cdn" {
   viewer_certificate {
     # REPLACE THE DEFAULT CERTIFICATE WITH YOUR ACM CERTIFICATE
     cloudfront_default_certificate = false
-    acm_certificate_arn            = "arn:aws:acm:ap-southeast-1:965825500656:certificate/6fdceb75-d588-48b3-9098-7b8890a0ce41" # Paste the ARN from your ACM console
+    acm_certificate_arn            = "arn:aws:acm:us-east-1:965825500656:certificate/110711f7-e812-4bb9-ad03-7e63198aeaa2" # Paste the ARN from your ACM console
     ssl_support_method             = "sni-only"
     minimum_protocol_version       = "TLSv1.2_2021"
   }
