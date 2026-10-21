@@ -6,6 +6,13 @@
         <h1 class="text-2xl font-extrabold tracking-tight text-darkpurple-dark">Financial Tracker</h1>
       </div>
 
+      <!-- NEW: Dev Environment Badge -->
+      <div
+        v-if="isDevEnvironment"
+        class="mb-6 p-2 bg-amber-100 text-amber-800 text-xs font-bold rounded-lg text-center uppercase tracking-wide border border-amber-200">
+        🚧 Development Environment
+      </div>
+
       <!-- ERROR MESSAGE -->
       <div v-if="errorMessage" class="mb-6 p-3 bg-rose-50 text-rose-600 text-sm font-bold rounded-xl text-center border border-rose-100">
         {{ errorMessage }}
@@ -137,6 +144,9 @@
   import { useRouter } from "vue-router";
   import { useCognito } from "~/composables/useCognito";
   import { useAuthStore } from "~/stores/auth";
+
+  const config = useRuntimeConfig();
+  const isDevEnvironment = config.public.appVersion.includes("dev");
 
   const router = useRouter();
   const { registerUser, loginUser, verifyEmail } = useCognito();
