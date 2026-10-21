@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+      - dev
+    tags:
+      - "v*"
 
 jobs:
   deploy:
@@ -13,6 +16,20 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Determine Environment & Version Tag
+        id: vars
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "ENV=prod" >> $GITHUB_ENV
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == refs/heads/main ]]; then
+            echo "ENV=prod" >> $GITHUB_ENV
+            echo "VERSION=v1.0.0-prod" >> $GITHUB_ENV
+          else
+            echo "ENV=dev" >> $GITHUB_ENV
+            echo "VERSION=v1.0.0-dev" >> $GITHUB_ENV
+          fi
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -25,31 +42,68 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init & Apply
+        id: tf
         working-directory: ./terraform
         run: |
           terraform init
-          terraform apply -auto-approve
+          terraform apply -auto-approve -var="environment=${{ env.ENV }}"
+
+          # Export Terraform outputs to environment variables for the frontend build
+          echo "API_URL=$(terraform output -raw api_endpoint)" >> $GITHUB_ENV
+          echo "COGNITO_POOL_ID=$(terraform output -raw cognito_user_pool_id)" >> $GITHUB_ENV
+          echo "COGNITO_CLIENT_ID=$(terraform output -raw cognito_client_id)" >> $GITHUB_ENV
+          echo "S3_BUCKET=$(terraform output -raw s3_bucket_name)" >> $GITHUB_ENV
+          echo "CLOUDFRONT_DIST_ID=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_ENV
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, Tag, and Push Docker Image
+      - name: Build, Tag, and Push Backend Docker Image
         working-directory: ./backend
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: financial-tracker-backend
-          IMAGE_TAG: latest
+          ECR_REPOSITORY: financial-tracker-backend-${{ env.ENV }}
+          IMAGE_TAG: ${{ env.VERSION }}
         run: |
-          docker build --provenance=false --platform linux/amd64 -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker build --provenance=false --platform linux/amd64 -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
       - name: Update Lambda Function Code
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: financial-tracker-backend
-          IMAGE_TAG: latest
+          ECR_REPOSITORY: financial-tracker-backend-${{ env.ENV }}
+          IMAGE_TAG: ${{ env.VERSION }}
         run: |
           aws lambda update-function-code \
-            --function-name financial-tracker-api \
+            --function-name financial-tracker-api-${{ env.ENV }} \
             --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Frontend Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Generate Nuxt Static SPA
+        working-directory: ./frontend
+        env:
+          NUXT_PUBLIC_APP_VERSION: ${{ env.VERSION }}
+          NUXT_PUBLIC_API_URL: ${{ env.API_URL }}
+          NUXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ env.COGNITO_POOL_ID }}
+          NUXT_PUBLIC_COGNITO_CLIENT_ID: ${{ env.COGNITO_CLIENT_ID }}
+        run: npm run build
+
+      - name: Deploy Frontend to S3 Bucket
+        run: |
+          aws s3 sync frontend/.output/public s3://${{ env.S3_BUCKET }} --delete
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ env.CLOUDFRONT_DIST_ID }} \
+            --paths "/*"

@@ -45,6 +45,8 @@
     <main class="max-w-6xl mx-auto px-4">
       <slot />
     </main>
+
+    <footer class="text-center py-4 text-xs text-darkpurple-light font-medium">Financial Tracker {{ version }} • Powered by AWS & Nuxt</footer>
   </div>
 </template>
 
@@ -53,7 +55,8 @@
   import { useAuthStore } from "~/stores/auth";
 
   const authStore = useAuthStore();
-
+  const config = useRuntimeConfig();
+  const version = config.public.appVersion;
   onMounted(() => {
     authStore.initAuth();
   });

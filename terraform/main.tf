@@ -1,4 +1,4 @@
-# 1. Tell Terraform to download the AWS plugin
+# 1. Terraform & Provider Configuration
 terraform {
   required_providers {
     aws = {
@@ -6,26 +6,31 @@ terraform {
       version = "~> 5.0"
     }
   }
-}
 
-terraform {
   backend "s3" {
     bucket = "financial-tracker-tfstate-965825500656"
-    key    = "prod/terraform.tfstate"
+    key    = "state/terraform.tfstate"
     region = "ap-southeast-1"
   }
 }
 
-
-# 2. Tell AWS which region to build in
 provider "aws" {
-  region = "ap-southeast-1" # This is the Singapore region
+  region = "ap-southeast-1"
 }
 
+# Variable to distinguish dev vs prod
+variable "environment" {
+  type        = string
+  default     = "dev"
+  description = "Target deployment environment (dev or prod)"
+}
 
+# ==========================================
+# DYNAMODB TABLE
+# ==========================================
 
 resource "aws_dynamodb_table" "financial_tracker" {
-  name         = "FinancialTracker"
+  name         = "FinancialTracker-${var.environment}"
   billing_mode = "PAY_PER_REQUEST"
 
   hash_key  = "PK"
@@ -41,36 +46,37 @@ resource "aws_dynamodb_table" "financial_tracker" {
     type = "S"
   }
 
-  # Add this TTL block
   ttl {
     attribute_name = "expire_at"
     enabled        = true
   }
 
   tags = {
-    Environment = "Dev"
+    Environment = var.environment
     Project     = "FinancialTracker"
   }
 }
 
-# Create a private container registry to store our Python Docker images
+# ==========================================
+# ECR REPOSITORY & BACKEND LAMBDA
+# ==========================================
+
 resource "aws_ecr_repository" "backend_api" {
-  name                 = "financial-tracker-backend"
+  name                 = "financial-tracker-backend-${var.environment}"
   image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
-    scan_on_push = true # Automatically scans Docker images for security vulnerabilities
+    scan_on_push = true
   }
 
   tags = {
-    Environment = "Dev"
+    Environment = var.environment
     Project     = "FinancialTracker"
   }
 }
 
-# 1. Create an IAM Role (Security permissions for Lambda)
 resource "aws_iam_role" "lambda_exec_role" {
-  name = "financial_tracker_lambda_role"
+  name = "financial_tracker_lambda_role_${var.environment}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -84,21 +90,29 @@ resource "aws_iam_role" "lambda_exec_role" {
   })
 }
 
-# Attach basic CloudWatch logging permissions so Lambda can write logs
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
   role       = aws_iam_role.lambda_exec_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Attach DynamoDB permissions so Lambda can read/write data
 resource "aws_iam_role_policy_attachment" "lambda_dynamodb" {
   role       = aws_iam_role.lambda_exec_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess"
 }
 
-# 2. Create the AWS Lambda Function using our ECR Docker Image
+# Auto-cleanup CloudWatch Logs after 14 days
+resource "aws_cloudwatch_log_group" "api_logs" {
+  name              = "/aws/lambda/${aws_lambda_function.api_backend.function_name}"
+  retention_in_days = 14
+
+  tags = {
+    Environment = var.environment
+    Project     = "FinancialTracker"
+  }
+}
+
 resource "aws_lambda_function" "api_backend" {
-  function_name = "financial-tracker-api"
+  function_name = "financial-tracker-api-${var.environment}"
   role          = aws_iam_role.lambda_exec_role.arn
   package_type  = "Image"
   image_uri     = "${aws_ecr_repository.backend_api.repository_url}:latest"
@@ -113,36 +127,37 @@ resource "aws_lambda_function" "api_backend" {
   }
 
   tags = {
-    Environment = "Dev"
+    Environment = var.environment
     Project     = "FinancialTracker"
   }
 }
 
-# 1. Create the HTTP API Gateway
+# ==========================================
+# API GATEWAY
+# ==========================================
+
 resource "aws_apigatewayv2_api" "http_api" {
-  name          = "financial-tracker-api-gateway"
+  name          = "financial-tracker-api-gateway-${var.environment}"
   protocol_type = "HTTP"
 
   cors_configuration {
     allow_origins = ["*"]
     allow_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-    allow_headers = ["*"]
+    allow_headers = ["content-type", "authorization", "x-guest-session"]
   }
 
   tags = {
-    Environment = "Dev"
+    Environment = var.environment
     Project     = "FinancialTracker"
   }
 }
 
-# 2. Create the default stage (auto-deploys any changes immediately)
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.http_api.id
   name        = "$default"
   auto_deploy = true
 }
 
-# 3. Connect API Gateway to your Lambda function
 resource "aws_apigatewayv2_integration" "lambda_integration" {
   api_id           = aws_apigatewayv2_api.http_api.id
   integration_type = "AWS_PROXY"
@@ -152,14 +167,12 @@ resource "aws_apigatewayv2_integration" "lambda_integration" {
   payload_format_version = "2.0"
 }
 
-# 4. Route all HTTP traffic (ANY path) to the Lambda integration
 resource "aws_apigatewayv2_route" "default_route" {
   api_id    = aws_apigatewayv2_api.http_api.id
   route_key = "ANY /{proxy+}"
   target    = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
 }
 
-# 5. Grant API Gateway permission to trigger Lambda
 resource "aws_lambda_permission" "api_gw_lambda" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
@@ -169,20 +182,13 @@ resource "aws_lambda_permission" "api_gw_lambda" {
   source_arn = "${aws_apigatewayv2_api.http_api.execution_arn}/*/*"
 }
 
-# 6. Print out the public web URL when Terraform finishes
-output "api_endpoint" {
-  value       = aws_apigatewayv2_api.http_api.api_endpoint
-  description = "The public URL for your Financial Tracker API"
-}
-
 # ==========================================
 # AWS COGNITO AUTHENTICATION
 # ==========================================
 
 resource "aws_cognito_user_pool" "users" {
-  name = "financial-tracker-users"
+  name = "financial-tracker-users-${var.environment}"
 
-  # Allow users to sign up and log in with their email
   alias_attributes         = ["email"]
   auto_verified_attributes = ["email"]
 
@@ -194,7 +200,6 @@ resource "aws_cognito_user_pool" "users" {
     require_uppercase = true
   }
 
-  # Ensure the email attribute is required
   schema {
     attribute_data_type = "String"
     name                = "email"
@@ -203,17 +208,15 @@ resource "aws_cognito_user_pool" "users" {
   }
 
   tags = {
-    Environment = "Dev"
+    Environment = var.environment
     Project     = "FinancialTracker"
   }
 }
 
-# Create an App Client for the Nuxt 4 Frontend
 resource "aws_cognito_user_pool_client" "nuxt_client" {
-  name         = "financial-tracker-nuxt-client"
+  name         = "financial-tracker-nuxt-client-${var.environment}"
   user_pool_id = aws_cognito_user_pool.users.id
 
-  # Must be false for Single Page Applications (SPAs) like Vue/Nuxt
   generate_secret = false
 
   explicit_auth_flows = [
@@ -223,24 +226,12 @@ resource "aws_cognito_user_pool_client" "nuxt_client" {
   ]
 }
 
-# Output the IDs so we can copy them into our Nuxt .env file later
-output "cognito_user_pool_id" {
-  value       = aws_cognito_user_pool.users.id
-  description = "The ID of the Cognito User Pool"
-}
-
-output "cognito_client_id" {
-  value       = aws_cognito_user_pool_client.nuxt_client.id
-  description = "The ID of the Cognito App Client"
-}
-
 # ==========================================
 # AUTOMATED REPORTING (SES & EVENTBRIDGE)
 # ==========================================
 
-# 1. Allow Lambda to send emails using SES
 resource "aws_iam_role_policy" "lambda_ses_policy" {
-  name = "lambda_ses_policy"
+  name = "lambda_ses_policy_${var.environment}"
   role = aws_iam_role.lambda_exec_role.id
 
   policy = jsonencode({
@@ -255,25 +246,152 @@ resource "aws_iam_role_policy" "lambda_ses_policy" {
   })
 }
 
-# 2. EventBridge Rule: Run at 11:59 PM on the last day of every month
 resource "aws_cloudwatch_event_rule" "monthly_report_rule" {
-  name                = "financial-tracker-monthly-report"
+  name                = "financial-tracker-monthly-report-${var.environment}"
   description         = "Triggers the monthly financial report generation"
   schedule_expression = "cron(59 23 L * ? *)"
 }
 
-# 3. Connect EventBridge to your Lambda
 resource "aws_cloudwatch_event_target" "lambda_target" {
   rule      = aws_cloudwatch_event_rule.monthly_report_rule.name
   target_id = "TriggerMonthlyReportLambda"
   arn       = aws_lambda_function.api_backend.arn
 }
 
-# 4. Give EventBridge permission to execute the Lambda
 resource "aws_lambda_permission" "allow_eventbridge" {
   statement_id  = "AllowExecutionFromEventBridge"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.api_backend.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.monthly_report_rule.arn
+}
+
+# ==========================================
+# FRONTEND HOSTING (S3 + CLOUDFRONT)
+# ==========================================
+
+resource "aws_s3_bucket" "frontend_bucket" {
+  bucket = "haikal-financial-tracker-frontend-${var.environment}"
+
+  tags = {
+    Environment = var.environment
+    Project     = "FinancialTracker"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "frontend_block" {
+  bucket = aws_s3_bucket.frontend_bucket.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_cloudfront_origin_access_control" "frontend_oac" {
+  name                              = "financial-tracker-oac-${var.environment}"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+resource "aws_cloudfront_distribution" "frontend_cdn" {
+  enabled             = true
+  is_ipv6_enabled     = true
+  default_root_object = "index.html"
+
+  origin {
+    domain_name              = aws_s3_bucket.frontend_bucket.bucket_regional_domain_name
+    origin_id                = "S3-${aws_s3_bucket.frontend_bucket.id}"
+    origin_access_control_id = aws_cloudfront_origin_access_control.frontend_oac.id
+  }
+
+  default_cache_behavior {
+    allowed_methods  = ["GET", "HEAD", "OPTIONS"]
+    cached_methods   = ["GET", "HEAD"]
+    target_origin_id = "S3-${aws_s3_bucket.frontend_bucket.id}"
+
+    forwarded_values {
+      query_string = false
+      cookies { forward = "none" }
+    }
+
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 0
+    default_ttl            = 3600
+    max_ttl                = 86400
+  }
+
+  # SPA Routing Rule: Direct deep links back to index.html for Vue Router
+  custom_error_response {
+    error_caching_min_ttl = 300
+    error_code            = 404
+    response_code         = 200
+    response_page_path    = "/index.html"
+  }
+
+  custom_error_response {
+    error_caching_min_ttl = 300
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+  }
+
+  restrictions {
+    geo_restriction { restriction_type = "none" }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+}
+
+resource "aws_s3_bucket_policy" "frontend_bucket_policy" {
+  bucket = aws_s3_bucket.frontend_bucket.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowCloudFrontServicePrincipalReadOnly"
+        Effect    = "Allow"
+        Principal = { Service = "cloudfront.amazonaws.com" }
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.frontend_bucket.arn}/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.frontend_cdn.arn
+          }
+        }
+      }
+    ]
+  })
+}
+
+# ==========================================
+# OUTPUTS
+# ==========================================
+
+output "api_endpoint" {
+  value       = aws_apigatewayv2_api.http_api.api_endpoint
+  description = "The public API Gateway URL"
+}
+
+output "cognito_user_pool_id" {
+  value       = aws_cognito_user_pool.users.id
+  description = "The Cognito User Pool ID"
+}
+
+output "cognito_client_id" {
+  value       = aws_cognito_user_pool_client.nuxt_client.id
+  description = "The Cognito Client ID"
+}
+
+output "cloudfront_url" {
+  value       = aws_cloudfront_distribution.frontend_cdn.domain_name
+  description = "The CloudFront CDN domain name"
+}
+
+output "s3_bucket_name" {
+  value       = aws_s3_bucket.frontend_bucket.id
+  description = "The S3 bucket name for frontend deployments"
 }
