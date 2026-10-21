@@ -107,6 +107,7 @@ jobs:
           NUXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ env.COGNITO_POOL_ID }}
           NUXT_PUBLIC_COGNITO_CLIENT_ID: ${{ env.COGNITO_CLIENT_ID }}
         run: npm run build
+        run: npx nuxi generate
 
       - name: Deploy Frontend to S3 Bucket
         run: |
