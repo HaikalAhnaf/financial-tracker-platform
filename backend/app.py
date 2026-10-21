@@ -77,7 +77,9 @@ def save_settings(event, user_id):
         'PK': user_id,
         'SK': 'SETTINGS',
         'reports_enabled': body.get('reports_enabled', False),
-        'report_emails': body.get('report_emails', [])
+        'report_emails': body.get('report_emails', []),
+        'budget_limit': int(body.get('budget_limit', 0)),         # NEW
+        'budget_threshold': int(body.get('budget_threshold', 0))  # NEW
     }
     table.put_item(Item=item)
     return build_response(200, {"message": "Settings saved", "settings": item})
@@ -136,43 +138,70 @@ def generate_and_send_report(user_id, user_email, is_automated=False):
         return build_response(500, {"error": "Failed to send email.", "details": str(e)})
 # [Keep your existing create_transaction, update_transaction_note, delete_transaction, get_transactions, create_category, get_categories, delete_category, and build_response functions exactly as they were here]
 
+def check_and_trigger_budget_alert(user_id, user_email, new_txn_amount, timestamp):
+    response = table.get_item(Key={'PK': user_id, 'SK': 'SETTINGS'})
+    settings = response.get('Item', {})
+    
+    threshold = int(settings.get('budget_threshold', 0))
+    limit = int(settings.get('budget_limit', 0))
+    emails_to_send = settings.get('report_emails', [user_email])
+    
+    if threshold <= 0: return # Alert is not configured
+    
+    # Calculate this month's total expenses (including the one just added)
+    month_str = timestamp[:7] 
+    txn_response = table.query(
+        KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_val)",
+        ExpressionAttributeValues={":pk": user_id, ":sk_val": f"TXN#{month_str}"}
+    )
+    txns = txn_response.get('Items', [])
+    current_expense = sum([Decimal(t['amount']) for t in txns if t['type'] == 'expense'])
+    
+    # Calculate what the expense was BEFORE this transaction
+    old_expense = current_expense - Decimal(new_txn_amount)
+    
+    # If the old expense was below the threshold, but this new one pushes it over, SEND ALARM!
+    if old_expense < Decimal(threshold) and current_expense >= Decimal(threshold):
+        subject = f"⚠️ Budget Alert: You crossed Rp {threshold} in expenses!"
+        body_text = f"Warning!\n\nYour expenses for {month_str} have just reached Rp {current_expense}.\nThis crosses your set alarm threshold of Rp {threshold} (Monthly limit: Rp {limit}).\n\nPlease check your Financial Tracker dashboard."
+        
+        try:
+            ses.send_email(
+                Source=SENDER_EMAIL,
+                Destination={'ToAddresses': emails_to_send},
+                Message={
+                    'Subject': {'Data': subject},
+                    'Body': {'Text': {'Data': body_text}}
+                }
+            )
+        except Exception as e:
+            print("SES Budget Alert Error:", e)
+
 # ==========================================
 # TRANSACTION LOGIC
 # ==========================================
 def create_transaction(event, user_id):
     body = json.loads(event.get('body', '{}'))
-    amount = body.get('amount')
-    category = body.get('category', 'Uncategorized')
-    txn_type = body.get('type', 'expense')
-    note = body.get('note', '')
-    
-    if not amount:
-        return build_response(400, {"error": "Amount is required"})
-        
-    date_str = datetime.utcnow().strftime('%Y-%m-%d')
-    txn_id = str(uuid.uuid4())[:8]
-    sort_key = f"TXN#{date_str}#{txn_id}"
+    timestamp = body.get('date', datetime.utcnow().isoformat()) + 'Z'
+    sk = f"TXN#{timestamp}"
     
     item = {
         'PK': user_id,
-        'SK': sort_key,
-        'amount': str(amount),
-        'category': category,
-        'type': txn_type,
-        'note': note,
-        'timestamp': datetime.utcnow().isoformat()
+        'SK': sk,
+        'type': body['type'],
+        'amount': str(body['amount']),
+        'category': body['category'],
+        'note': body.get('note', ''),
+        'timestamp': timestamp
     }
     table.put_item(Item=item)
     
-    numeric_amount = Decimal(str(amount))
-    delta = numeric_amount if txn_type == 'income' else -numeric_amount
-    
-    table.update_item(
-        Key={'PK': user_id, 'SK': 'BALANCE'},
-        UpdateExpression="ADD current_balance :delta",
-        ExpressionAttributeValues={':delta': delta}
-    )
-    return build_response(201, {"message": "Transaction created", "transaction": item})
+    # NEW: Trigger budget alarm if the transaction is an expense
+    if body['type'] == 'expense':
+        user_email = user_id.split('#')[1]
+        check_and_trigger_budget_alert(user_id, user_email, body['amount'], timestamp)
+        
+    return build_response(200, {"message": "Transaction created", "transaction": item})
 
 def update_transaction_note(event, user_id):
     body = json.loads(event.get('body', '{}'))
