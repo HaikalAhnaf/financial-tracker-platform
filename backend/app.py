@@ -1,8 +1,8 @@
 import json
 import os
 import boto3
-import uuid
 import base64
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -11,22 +11,33 @@ ses = boto3.client('ses', region_name=os.environ.get('AWS_REGION', 'ap-southeast
 table_name = os.environ.get('DYNAMODB_TABLE', 'FinancialTracker')
 table = dynamodb.Table(table_name)
 
+SENDER_EMAIL = "Financial Tracker <no-reply@haikalahnaf.my.id>"
+
 def extract_user_id(event):
+    """Decodes JWT and determines if this is a permanent user or a temporary guest session"""
     headers = {k.lower(): v for k, v in event.get('headers', {}).items()}
     auth_header = headers.get('authorization', '')
     if not auth_header.startswith('Bearer '): raise ValueError("Missing Auth header")
+    
     token = auth_header.split(' ')[1]
     payload_part = token.split('.')[1]
     payload_part += '=' * ((4 - len(payload_part) % 4) % 4)
     decoded = json.loads(base64.urlsafe_b64decode(payload_part).decode('utf-8'))
+    
     email = decoded.get('email')
     if not email: raise ValueError("Invalid token")
-    return f"USER#{email}", email
+    
+    guest_session = headers.get('x-guest-session')
+    
+    # If the demo user logs in AND has a guest session, isolate their data
+    if email == 'demo@haikalahnaf.my.id' and guest_session:
+        return f"GUEST#{guest_session}", email, True
+        
+    return f"USER#{email}", email, False
 
 def lambda_handler(event, context):
     print("Received event:", json.dumps(event))
     
-    # Check if triggered automatically by EventBridge
     if event.get('source') == 'aws.events':
         return process_automated_reports()
 
@@ -36,21 +47,21 @@ def lambda_handler(event, context):
         if http_method == 'OPTIONS':
             return build_response(200, "CORS Preflight OK")
             
-        user_id, user_email = extract_user_id(event)
+        user_id, user_email, is_guest = extract_user_id(event)
         query_params = event.get('queryStringParameters') or {}
         entity = query_params.get('entity')
         
         if entity == 'settings':
             if http_method == 'GET': return get_settings(user_id)
-            if http_method == 'POST': return save_settings(event, user_id)
+            if http_method == 'POST': return save_settings(event, user_id, is_guest)
         elif entity == 'report' and http_method == 'POST':
             return generate_and_send_report(user_id, user_email)
         elif entity == 'category':
-            if http_method == 'POST': return create_category(event, user_id)
+            if http_method == 'POST': return create_category(event, user_id, is_guest)
             if http_method == 'GET': return get_categories(user_id)
             if http_method == 'DELETE': return delete_category(event, user_id)
         else:
-            if http_method == 'POST': return create_transaction(event, user_id)
+            if http_method == 'POST': return create_transaction(event, user_id, user_email, is_guest)
             if http_method == 'GET': return get_transactions(event, user_id)
             if http_method == 'DELETE': return delete_transaction(event, user_id)
             if http_method == 'PUT': return update_transaction_note(event, user_id)
@@ -64,41 +75,39 @@ def lambda_handler(event, context):
         return build_response(500, {"error": "Internal server error", "details": str(e)})
 
 # ==========================================
-# REPORTING LOGIC
+# REPORTING & SETTINGS LOGIC
 # ==========================================
 def get_settings(user_id):
     response = table.get_item(Key={'PK': user_id, 'SK': 'SETTINGS'})
     settings = response.get('Item', {'reports_enabled': False, 'report_emails': []})
     return build_response(200, {"settings": settings})
 
-def save_settings(event, user_id):
+def save_settings(event, user_id, is_guest=False):
     body = json.loads(event.get('body', '{}'))
     item = {
         'PK': user_id,
         'SK': 'SETTINGS',
         'reports_enabled': body.get('reports_enabled', False),
         'report_emails': body.get('report_emails', []),
-        'budget_limit': int(body.get('budget_limit', 0)),         # NEW
-        'budget_threshold': int(body.get('budget_threshold', 0))  # NEW
+        'budget_limit': int(body.get('budget_limit', 0)),         
+        'budget_threshold': int(body.get('budget_threshold', 0))  
     }
+    
+    if is_guest:
+        item['expire_at'] = int(time.time()) + 86400 # 24 hours TTL
+        
     table.put_item(Item=item)
     return build_response(200, {"message": "Settings saved", "settings": item})
 
 def process_automated_reports():
-    """Scans for all users with reports enabled and sends them."""
-    # Note: For massive scale, use a GSI, but scan is fine for portfolio
     response = table.scan(FilterExpression="SK = :sk AND reports_enabled = :true", ExpressionAttributeValues={":sk": "SETTINGS", ":true": True})
     for user_settings in response.get('Items', []):
         user_id = user_settings['PK']
-        user_email = user_id.split('#')[1]
-        generate_and_send_report(user_id, user_email, is_automated=True)
+        # Do not send automated reports for guest sessions
+        if not user_id.startswith("GUEST#"):
+            user_email = user_id.split('#')[1]
+            generate_and_send_report(user_id, user_email, is_automated=True)
     return {"statusCode": 200, "body": "Automated reports processed"}
-
-# backend/app.py
-
-# Verified domain sender signature
-# Set your domain sender with a custom display name
-SENDER_EMAIL = "Financial Tracker <no-reply@haikalahnaf.my.id>"
 
 def generate_and_send_report(user_id, user_email, is_automated=False):
     response = table.get_item(Key={'PK': user_id, 'SK': 'SETTINGS'})
@@ -108,7 +117,6 @@ def generate_and_send_report(user_id, user_email, is_automated=False):
     if not emails_to_send:
         return build_response(400, {"error": "No email addresses configured."})
 
-    # Fetch this month's transactions
     month_str = datetime.utcnow().strftime('%Y-%m')
     txn_response = table.query(
         KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_val)",
@@ -136,7 +144,6 @@ def generate_and_send_report(user_id, user_email, is_automated=False):
     except Exception as e:
         print("SES Error:", e)
         return build_response(500, {"error": "Failed to send email.", "details": str(e)})
-# [Keep your existing create_transaction, update_transaction_note, delete_transaction, get_transactions, create_category, get_categories, delete_category, and build_response functions exactly as they were here]
 
 def check_and_trigger_budget_alert(user_id, user_email, new_txn_amount, timestamp):
     response = table.get_item(Key={'PK': user_id, 'SK': 'SETTINGS'})
@@ -146,9 +153,8 @@ def check_and_trigger_budget_alert(user_id, user_email, new_txn_amount, timestam
     limit = int(settings.get('budget_limit', 0))
     emails_to_send = settings.get('report_emails', [user_email])
     
-    if threshold <= 0: return # Alert is not configured
+    if threshold <= 0: return 
     
-    # Calculate this month's total expenses (including the one just added)
     month_str = timestamp[:7] 
     txn_response = table.query(
         KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_val)",
@@ -157,10 +163,8 @@ def check_and_trigger_budget_alert(user_id, user_email, new_txn_amount, timestam
     txns = txn_response.get('Items', [])
     current_expense = sum([Decimal(t['amount']) for t in txns if t['type'] == 'expense'])
     
-    # Calculate what the expense was BEFORE this transaction
     old_expense = current_expense - Decimal(new_txn_amount)
     
-    # If the old expense was below the threshold, but this new one pushes it over, SEND ALARM!
     if old_expense < Decimal(threshold) and current_expense >= Decimal(threshold):
         subject = f"⚠️ Budget Alert: You crossed Rp {threshold} in expenses!"
         body_text = f"Warning!\n\nYour expenses for {month_str} have just reached Rp {current_expense}.\nThis crosses your set alarm threshold of Rp {threshold} (Monthly limit: Rp {limit}).\n\nPlease check your Financial Tracker dashboard."
@@ -180,7 +184,7 @@ def check_and_trigger_budget_alert(user_id, user_email, new_txn_amount, timestam
 # ==========================================
 # TRANSACTION LOGIC
 # ==========================================
-def create_transaction(event, user_id):
+def create_transaction(event, user_id, user_email, is_guest=False):
     body = json.loads(event.get('body', '{}'))
     timestamp = body.get('date', datetime.utcnow().isoformat()) + 'Z'
     sk = f"TXN#{timestamp}"
@@ -194,11 +198,13 @@ def create_transaction(event, user_id):
         'note': body.get('note', ''),
         'timestamp': timestamp
     }
+    
+    if is_guest:
+        item['expire_at'] = int(time.time()) + 86400 # 24 hours TTL
+        
     table.put_item(Item=item)
     
-    # NEW: Trigger budget alarm if the transaction is an expense
-    if body['type'] == 'expense':
-        user_email = user_id.split('#')[1]
+    if body['type'] == 'expense' and not is_guest:
         check_and_trigger_budget_alert(user_id, user_email, body['amount'], timestamp)
         
     return build_response(200, {"message": "Transaction created", "transaction": item})
@@ -223,21 +229,10 @@ def delete_transaction(event, user_id):
     sk_to_delete = body.get('sk')
     
     response = table.get_item(Key={'PK': user_id, 'SK': sk_to_delete})
-    txn = response.get('Item')
-    if not txn:
+    if not response.get('Item'):
         return build_response(404, {"error": "Transaction not found"})
         
-    amount = Decimal(str(txn.get('amount', '0')))
-    txn_type = txn.get('type', 'expense')
-    
     table.delete_item(Key={'PK': user_id, 'SK': sk_to_delete})
-    
-    reverse_delta = amount if txn_type == 'expense' else -amount
-    table.update_item(
-        Key={'PK': user_id, 'SK': 'BALANCE'},
-        UpdateExpression="ADD current_balance :delta",
-        ExpressionAttributeValues={':delta': reverse_delta}
-    )
     return build_response(200, {"message": "Transaction deleted"})
 
 def get_transactions(event, user_id):
@@ -248,34 +243,23 @@ def get_transactions(event, user_id):
     time_range = query_params.get('range')
     
     try:
-        # 1. Custom Date Range Logic
         if start_date and end_date:
             start_sk = f"TXN#{start_date}"
-            # Append 23:59:59 to include the entire end date
             end_sk = f"TXN#{end_date}T23:59:59" 
-            
             response = table.query(
                 KeyConditionExpression="PK = :pk AND SK BETWEEN :start_sk AND :end_sk",
-                ExpressionAttributeValues={
-                    ":pk": user_id,
-                    ":start_sk": start_sk,
-                    ":end_sk": end_sk
-                }
+                ExpressionAttributeValues={":pk": user_id, ":start_sk": start_sk, ":end_sk": end_sk}
             )
-            
-        # 2. Specific Month Logic (Dashboard)
         elif month:
             response = table.query(
                 KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_val)",
                 ExpressionAttributeValues={":pk": user_id, ":sk_val": f"TXN#{month}"}
             )
-            
-        # 3. Preset Range Logic (Last 6 Months, etc.)
         else:
             if time_range == '1m': days_ago = 30
             elif time_range == '3m': days_ago = 90
             elif time_range == '1y': days_ago = 365
-            else: days_ago = 180 # Default 6m
+            else: days_ago = 180 
             
             past_date = (datetime.utcnow() - timedelta(days=days_ago)).strftime('%Y-%m-%dT%H:%M:%S')
             start_sk = f"TXN#{past_date}"
@@ -297,15 +281,14 @@ def get_transactions(event, user_id):
 # ==========================================
 # CATEGORY LOGIC
 # ==========================================
-def create_category(event, user_id):
+def create_category(event, user_id, is_guest=False):
     body = json.loads(event.get('body', '{}'))
     name = body.get('name')
-    cat_type = body.get('type') # 'income' or 'expense'
+    cat_type = body.get('type') 
     
     if not name or not cat_type:
         return build_response(400, {"error": "Category name and type are required"})
         
-    # SK format: CATEGORY#expense#food
     sort_key = f"CATEGORY#{cat_type}#{name.lower()}"
     
     item = {
@@ -315,6 +298,10 @@ def create_category(event, user_id):
         'type': cat_type,
         'timestamp': datetime.utcnow().isoformat()
     }
+    
+    if is_guest:
+        item['expire_at'] = int(time.time()) + 86400 # 24 hours TTL
+        
     table.put_item(Item=item)
     return build_response(201, {"message": "Category created", "category": item})
 
@@ -324,15 +311,19 @@ def get_categories(user_id):
         ExpressionAttributeValues={":pk": user_id, ":sk_val": "CATEGORY#"}
     )
     
-    # Provide default categories if the user has none yet
     categories = response.get('Items', [])
     if not categories:
+        # If it is a guest (or new user), generate default TTL categories
+        expire = int(time.time()) + 86400 if user_id.startswith("GUEST#") else None
+        
         defaults = [
             {'PK': user_id, 'SK': 'CATEGORY#expense#food', 'name': 'Food', 'type': 'expense'},
             {'PK': user_id, 'SK': 'CATEGORY#expense#transport', 'name': 'Transport', 'type': 'expense'},
             {'PK': user_id, 'SK': 'CATEGORY#income#salary', 'name': 'Salary', 'type': 'income'}
         ]
+        
         for cat in defaults:
+            if expire: cat['expire_at'] = expire
             table.put_item(Item=cat)
         categories = defaults
 
@@ -358,7 +349,7 @@ def build_response(status_code, body):
         "headers": {
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Guest-Session",
             "Access-Control-Allow-Methods": "OPTIONS,POST,GET,PUT,DELETE"
         },
         "body": json.dumps(body, cls=DecimalEncoder)

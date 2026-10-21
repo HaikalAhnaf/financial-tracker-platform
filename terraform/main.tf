@@ -41,6 +41,12 @@ resource "aws_dynamodb_table" "financial_tracker" {
     type = "S"
   }
 
+  # Add this TTL block
+  ttl {
+    attribute_name = "expire_at"
+    enabled        = true
+  }
+
   tags = {
     Environment = "Dev"
     Project     = "FinancialTracker"

@@ -124,6 +124,25 @@
             {{ reportStatusMsg }}
           </div>
 
+          <div class="grid grid-cols-2 gap-4 mb-6 border-t border-darkpurple/10 pt-4">
+            <div>
+              <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Monthly Expense Limit (Rp)</label>
+              <input
+                v-model="budgetLimit"
+                type="number"
+                placeholder="e.g. 5000000"
+                class="w-full bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-darkpurple outline-none" />
+            </div>
+            <div>
+              <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Alert Alarm Threshold (Rp)</label>
+              <input
+                v-model="budgetThreshold"
+                type="number"
+                placeholder="e.g. 250000"
+                class="w-full bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark rounded-xl px-4 py-2.5 focus:ring-2 focus:ring-darkpurple outline-none" />
+            </div>
+          </div>
+
           <div class="space-y-4 pt-2">
             <div>
               <label class="block text-xs font-bold text-darkpurple-light uppercase tracking-wider mb-1.5">Recipient Email List</label>
@@ -295,6 +314,10 @@
   const reportStatusMsg = ref("");
   const reportStatusIsError = ref(false);
 
+  // Budget limit
+  const budgetLimit = ref("");
+  const budgetThreshold = ref("");
+
   onMounted(() => {
     categoryStore.fetchCategories();
     fetchReportSettings();
@@ -308,6 +331,8 @@
       if (data?.settings) {
         reportsEnabled.value = !!data.settings.reports_enabled;
         reportEmails.value = data.settings.report_emails || [];
+        budgetLimit.value = data.settings.budget_limit || "";
+        budgetThreshold.value = data.settings.budget_threshold || "";
       }
     } catch (err) {
       console.error("Failed to load settings:", err);
@@ -338,6 +363,8 @@
         body: {
           reports_enabled: reportsEnabled.value,
           report_emails: reportEmails.value,
+          budget_limit: Number(budgetLimit.value),
+          budget_threshold: Number(budgetThreshold.value),
         },
       });
       reportStatusMsg.value = "Report settings saved!";

@@ -41,6 +41,38 @@
       </div>
     </div>
 
+    <!-- Monthly Budget Progress Bar -->
+    <div v-if="budgetLimit > 0" class="bg-white p-6 rounded-2xl shadow-sm border border-darkpurple/5 mt-6 mb-6">
+      <div class="flex justify-between items-end mb-3">
+        <div>
+          <h3 class="text-sm font-bold text-darkpurple-dark uppercase tracking-wider">Monthly Budget Tracker</h3>
+          <p class="text-xs font-medium text-darkpurple-light mt-0.5">Alarm set at {{ formatRupiah(budgetThreshold) }}</p>
+        </div>
+        <div class="text-right">
+          <span class="text-xl font-bold" :class="store.totalExpense >= budgetThreshold ? 'text-rose-600' : 'text-darkpurple-dark'">
+            {{ formatRupiah(store.totalExpense) }}
+          </span>
+          <span class="text-sm text-darkpurple-light font-medium">/ {{ formatRupiah(budgetLimit) }}</span>
+        </div>
+      </div>
+
+      <!-- The Bar -->
+      <div class="w-full bg-brokenwhite rounded-full h-4 relative overflow-hidden shadow-inner">
+        <!-- Dynamic Fill -->
+        <div
+          class="h-4 rounded-full transition-all duration-500 ease-out"
+          :class="progressBarColor"
+          :style="{ width: progressPercentage + '%' }"></div>
+
+        <!-- Threshold Marker Line -->
+        <div
+          v-if="budgetThreshold > 0"
+          class="absolute top-0 bottom-0 w-1 bg-darkpurple z-10 opacity-70"
+          :style="{ left: thresholdPercentage + '%' }"
+          title="Alarm Threshold"></div>
+      </div>
+    </div>
+
     <!-- Quick Add Form -->
     <div class="bg-white rounded-2xl p-6 shadow-sm border border-darkpurple/10">
       <h3 class="text-lg font-bold tracking-tight text-darkpurple-dark mb-4">Quick Add Transaction</h3>
@@ -109,17 +141,21 @@
   import { ref, computed, onMounted, watch } from "vue";
   import { useTransactionStore } from "~/stores/transaction";
   import { useCategoryStore } from "~/stores/category";
+  import { useAuthStore } from "~/stores/auth";
   import { useCurrency } from "~/composables/useCurrency";
   import CategoryChart from "~/components/CategoryChart.vue";
 
+  const config = useRuntimeConfig();
+  const authStore = useAuthStore();
   const store = useTransactionStore();
   const categoryStore = useCategoryStore();
   const { formatRupiah } = useCurrency();
   const isSubmitting = ref(false);
+  const budgetLimit = ref(0);
+  const budgetThreshold = ref(0);
 
   const newTxn = ref({ category: "", amount: null, type: "expense", note: "" });
 
-  // Automatically filter categories based on the selected type
   const availableCategories = computed(() => {
     return newTxn.value.type === "expense" ? categoryStore.expenseCategories : categoryStore.incomeCategories;
   });
@@ -148,9 +184,24 @@
     return selected ? selected.label : "Selected Month";
   });
 
+  async function fetchDashboardSettings() {
+    try {
+      const data = await $fetch(`${config.public.apiUrl}?entity=settings`, {
+        headers: { Authorization: `Bearer ${authStore.token}` },
+      });
+      if (data?.settings) {
+        budgetLimit.value = Number(data.settings.budget_limit) || 0;
+        budgetThreshold.value = Number(data.settings.budget_threshold) || 0;
+      }
+    } catch (err) {
+      console.error("Failed to load settings:", err);
+    }
+  }
+
   onMounted(() => {
     store.fetchTransactions();
     categoryStore.fetchCategories();
+    fetchDashboardSettings();
   });
 
   async function submitTransaction() {
@@ -165,4 +216,20 @@
       isSubmitting.value = false;
     }
   }
+
+  const progressPercentage = computed(() => {
+    if (!budgetLimit.value) return 0;
+    return Math.min((store.totalExpense / budgetLimit.value) * 100, 100);
+  });
+
+  const thresholdPercentage = computed(() => {
+    if (!budgetLimit.value) return 0;
+    return Math.min((budgetThreshold.value / budgetLimit.value) * 100, 100);
+  });
+
+  const progressBarColor = computed(() => {
+    if (store.totalExpense >= budgetThreshold.value && budgetThreshold.value > 0) return "bg-rose-500";
+    if (progressPercentage.value > 80) return "bg-amber-400";
+    return "bg-emerald-500";
+  });
 </script>
