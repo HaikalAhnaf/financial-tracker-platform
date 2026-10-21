@@ -302,7 +302,7 @@ resource "aws_cloudfront_distribution" "frontend_cdn" {
   is_ipv6_enabled     = true
   default_root_object = "index.html"
 
-  aliases = ["tracker.haikalahnaf.my.id"]
+  aliases = ["finance.haikalahnaf.my.id"]
 
   origin {
     domain_name              = aws_s3_bucket.frontend_bucket.bucket_regional_domain_name
