@@ -64,6 +64,7 @@ resource "aws_dynamodb_table" "financial_tracker" {
 resource "aws_ecr_repository" "backend_api" {
   name                 = "financial-tracker-backend-${var.environment}"
   image_tag_mutability = "MUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
