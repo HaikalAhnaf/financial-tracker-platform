@@ -64,7 +64,7 @@ resource "aws_dynamodb_table" "financial_tracker" {
 resource "aws_ecr_repository" "backend_api" {
   name                 = "financial-tracker-backend-${var.environment}"
   image_tag_mutability = "MUTABLE"
-  force_delete         = true
+  force_delete         = true # Allow destroying repo if images exist
 
   image_scanning_configuration {
     scan_on_push = true
@@ -272,7 +272,8 @@ resource "aws_lambda_permission" "allow_eventbridge" {
 # ==========================================
 
 resource "aws_s3_bucket" "frontend_bucket" {
-  bucket = "haikal-financial-tracker-frontend-${var.environment}"
+  bucket        = "haikal-financial-tracker-frontend-${var.environment}"
+  force_destroy = true # Allow destroying bucket if objects exist
 
   tags = {
     Environment = var.environment

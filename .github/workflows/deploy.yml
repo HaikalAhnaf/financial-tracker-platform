@@ -45,7 +45,8 @@ jobs:
         id: tf
         working-directory: ./terraform
         run: |
-          terraform init
+          # Isolate state files per environment using dynamic backend keys
+          terraform init -backend-config="key=environments/${{ env.ENV }}/terraform.tfstate" -reconfigure
           terraform apply -auto-approve -var="environment=${{ env.ENV }}"
 
           echo "API_URL=$(terraform output -raw api_endpoint)" >> $GITHUB_ENV
