@@ -395,3 +395,8 @@ output "s3_bucket_name" {
   value       = aws_s3_bucket.frontend_bucket.id
   description = "The S3 bucket name for frontend deployments"
 }
+
+output "cloudfront_distribution_id" {
+  value       = aws_cloudfront_distribution.frontend_cdn.id
+  description = "The CloudFront Distribution ID for cache invalidation"
+}

@@ -41,24 +41,19 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform Init & Apply
-        id: tf
+      # Step 1: Initialize Terraform and create ONLY the ECR repository first
+      - name: Provision ECR Repository
         working-directory: ./terraform
         run: |
           terraform init
-          terraform apply -auto-approve -var="environment=${{ env.ENV }}"
+          terraform apply -auto-approve -target=aws_ecr_repository.backend_api -var="environment=${{ env.ENV }}"
 
-          # Export Terraform outputs to environment variables for the frontend build
-          echo "API_URL=$(terraform output -raw api_endpoint)" >> $GITHUB_ENV
-          echo "COGNITO_POOL_ID=$(terraform output -raw cognito_user_pool_id)" >> $GITHUB_ENV
-          echo "COGNITO_CLIENT_ID=$(terraform output -raw cognito_client_id)" >> $GITHUB_ENV
-          echo "S3_BUCKET=$(terraform output -raw s3_bucket_name)" >> $GITHUB_ENV
-          echo "CLOUDFRONT_DIST_ID=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_ENV
-
+      # Step 2: Authenticate with ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # Step 3: Build and push the Docker image to ECR so Lambda has an image to reference
       - name: Build, Tag, and Push Backend Docker Image
         working-directory: ./backend
         env:
@@ -70,6 +65,20 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
+      # Step 4: Run full Terraform Apply now that the ECR image exists
+      - name: Full Terraform Apply
+        id: tf
+        working-directory: ./terraform
+        run: |
+          terraform apply -auto-approve -var="environment=${{ env.ENV }}"
+
+          echo "API_URL=$(terraform output -raw api_endpoint)" >> $GITHUB_ENV
+          echo "COGNITO_POOL_ID=$(terraform output -raw cognito_user_pool_id)" >> $GITHUB_ENV
+          echo "COGNITO_CLIENT_ID=$(terraform output -raw cognito_client_id)" >> $GITHUB_ENV
+          echo "S3_BUCKET=$(terraform output -raw s3_bucket_name)" >> $GITHUB_ENV
+          echo "CLOUDFRONT_DIST_ID=$(terraform output -raw cloudfront_distribution_id)" >> $GITHUB_ENV
+
+      # Step 5: Update Lambda to point to the newest built tag
       - name: Update Lambda Function Code
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
@@ -80,6 +89,7 @@ jobs:
             --function-name financial-tracker-api-${{ env.ENV }} \
             --image-uri $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
+      # Step 6: Build and Deploy Frontend
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
