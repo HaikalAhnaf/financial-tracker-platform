@@ -302,6 +302,8 @@ resource "aws_cloudfront_distribution" "frontend_cdn" {
   is_ipv6_enabled     = true
   default_root_object = "index.html"
 
+  aliases = ["tracker.haikalahnaf.my.id"]
+
   origin {
     domain_name              = aws_s3_bucket.frontend_bucket.bucket_regional_domain_name
     origin_id                = "S3-${aws_s3_bucket.frontend_bucket.id}"
@@ -344,7 +346,11 @@ resource "aws_cloudfront_distribution" "frontend_cdn" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    # REPLACE THE DEFAULT CERTIFICATE WITH YOUR ACM CERTIFICATE
+    cloudfront_default_certificate = false
+    acm_certificate_arn            = "arn:aws:acm:ap-southeast-1:929472429667:certificate/76ecd810-34a5-4f61-a8a6-54d44be8db60" # Paste the ARN from your ACM console
+    ssl_support_method             = "sni-only"
+    minimum_protocol_version       = "TLSv1.2_2021"
   }
 }
 
