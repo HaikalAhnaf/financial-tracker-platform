@@ -213,37 +213,58 @@ def delete_transaction(event, user_id):
 
 def get_transactions(event, user_id):
     query_params = event.get('queryStringParameters') or {}
-    month_filter = query_params.get('month')
+    month = query_params.get('month')
+    start_date = query_params.get('startDate')
+    end_date = query_params.get('endDate')
     time_range = query_params.get('range')
     
-    if month_filter:
-        sk_condition = "PK = :pk AND begins_with(SK, :sk_val)"
-        sk_val = f"TXN#{month_filter}"
-    elif time_range and time_range != 'all':
-        now = datetime.utcnow()
-        if time_range == '3m': start_date = now - timedelta(days=90)
-        elif time_range == '6m': start_date = now - timedelta(days=180)
-        elif time_range == '1y': start_date = now - timedelta(days=365)
-        else: start_date = now - timedelta(days=180)
-        sk_condition = "PK = :pk AND SK >= :sk_val"
-        sk_val = f"TXN#{start_date.strftime('%Y-%m-%d')}"
-    else:
-        sk_condition = "PK = :pk AND begins_with(SK, :sk_val)"
-        sk_val = "TXN#"
+    try:
+        # 1. Custom Date Range Logic
+        if start_date and end_date:
+            start_sk = f"TXN#{start_date}"
+            # Append 23:59:59 to include the entire end date
+            end_sk = f"TXN#{end_date}T23:59:59" 
+            
+            response = table.query(
+                KeyConditionExpression="PK = :pk AND SK BETWEEN :start_sk AND :end_sk",
+                ExpressionAttributeValues={
+                    ":pk": user_id,
+                    ":start_sk": start_sk,
+                    ":end_sk": end_sk
+                }
+            )
+            
+        # 2. Specific Month Logic (Dashboard)
+        elif month:
+            response = table.query(
+                KeyConditionExpression="PK = :pk AND begins_with(SK, :sk_val)",
+                ExpressionAttributeValues={":pk": user_id, ":sk_val": f"TXN#{month}"}
+            )
+            
+        # 3. Preset Range Logic (Last 6 Months, etc.)
+        else:
+            if time_range == '1m': days_ago = 30
+            elif time_range == '3m': days_ago = 90
+            elif time_range == '1y': days_ago = 365
+            else: days_ago = 180 # Default 6m
+            
+            past_date = (datetime.utcnow() - timedelta(days=days_ago)).strftime('%Y-%m-%dT%H:%M:%S')
+            start_sk = f"TXN#{past_date}"
+            
+            response = table.query(
+                KeyConditionExpression="PK = :pk AND SK >= :start_sk",
+                ExpressionAttributeValues={":pk": user_id, ":start_sk": start_sk}
+            )
+            
+        items = response.get('Items', [])
+        balance = sum([Decimal(t['amount']) if t['type'] == 'income' else -Decimal(t['amount']) for t in items])
         
-    txn_response = table.query(
-        KeyConditionExpression=sk_condition,
-        ExpressionAttributeValues={":pk": user_id, ":sk_val": sk_val}
-    )
+        return build_response(200, {"balance": balance, "transactions": items})
+        
+    except Exception as e:
+        print("Error fetching transactions:", e)
+        return build_response(500, {"error": "Failed to fetch transactions"})
     
-    balance_response = table.get_item(Key={'PK': user_id, 'SK': 'BALANCE'})
-    current_balance = balance_response.get('Item', {}).get('current_balance', Decimal('0'))
-    
-    return build_response(200, {
-        "balance": int(current_balance),
-        "transactions": txn_response.get('Items', [])
-    })
-
 # ==========================================
 # CATEGORY LOGIC
 # ==========================================

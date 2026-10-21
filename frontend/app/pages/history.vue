@@ -1,5 +1,6 @@
 <template>
-  <div class="space-y-8 pb-16">
+  <div class="space-y-6 pb-16">
+    <!-- Header Section -->
     <div
       class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl shadow-sm border border-darkpurple/5">
       <div>
@@ -7,11 +8,40 @@
         <p class="text-sm text-darkpurple-light font-medium mt-0.5">Comprehensive view of your financial history</p>
       </div>
 
-      <div class="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+      <div class="flex flex-col sm:flex-row gap-3 w-full sm:w-auto items-end sm:items-center">
+        <!-- Date Range Pickers (Only visible when 'custom' is selected) -->
+        <div v-if="store.historyRange === 'custom'" class="flex items-center gap-2">
+          <input
+            type="date"
+            v-model="store.customStartDate"
+            class="bg-brokenwhite border border-darkpurple/10 text-darkpurple-dark rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-darkpurple outline-none" />
+          <span class="text-darkpurple-light text-sm font-bold">to</span>
+          <input
+            type="date"
+            v-model="store.customEndDate"
+            class="bg-brokenwhite border border-darkpurple/10 text-darkpurple-dark rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-darkpurple outline-none" />
+          <button
+            @click="applyCustomRange"
+            class="bg-darkpurple hover:bg-darkpurple-light text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all">
+            Apply
+          </button>
+        </div>
+
+        <!-- The Range Dropdown -->
+        <select
+          v-model="store.historyRange"
+          class="bg-white border border-darkpurple/10 text-darkpurple-dark font-semibold rounded-xl px-4 py-2.5 shadow-sm focus:outline-none focus:ring-2 focus:ring-darkpurple/20 cursor-pointer">
+          <option value="1m">Last 1 Month</option>
+          <option value="3m">Last 3 Months</option>
+          <option value="6m">Last 6 Months</option>
+          <option value="1y">Last 1 Year</option>
+          <option value="custom">Custom Range...</option>
+        </select>
+
+        <!-- The Export Button -->
         <button
           @click="exportToXLSX"
-          :disabled="filteredTransactions.length === 0"
-          class="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-xl shadow-sm transition-all disabled:opacity-50 cursor-pointer">
+          class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-6 rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center gap-2">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               stroke-linecap="round"
@@ -21,25 +51,10 @@
           </svg>
           Export XLSX
         </button>
-
-        <div class="relative">
-          <select
-            v-model="store.historyRange"
-            class="w-full sm:w-auto appearance-none bg-brokenwhite border border-darkpurple/20 text-darkpurple-dark font-bold py-2.5 pl-4 pr-10 rounded-xl hover:border-darkpurple/40 focus:outline-none focus:ring-2 focus:ring-darkpurple/20 transition-all cursor-pointer">
-            <option value="3m">Last 3 Months</option>
-            <option value="6m">Last 6 Months</option>
-            <option value="1y">Last 1 Year</option>
-            <option value="all">All Time</option>
-          </select>
-          <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-darkpurple-light">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
-            </svg>
-          </div>
-        </div>
       </div>
     </div>
 
+    <!-- Filter & Search Bar -->
     <div class="bg-white p-4 rounded-2xl shadow-sm border border-darkpurple/5 flex flex-col md:flex-row justify-between items-center gap-4">
       <div class="relative w-full md:w-80">
         <input
@@ -84,6 +99,7 @@
       </div>
     </div>
 
+    <!-- Table Section -->
     <div class="bg-white rounded-2xl shadow-sm border border-darkpurple/10 overflow-hidden">
       <div v-if="store.isLoading" class="p-12 text-center text-darkpurple-light font-medium">Loading ledger data...</div>
       <div v-else-if="store.error" class="p-12 text-center text-rose-600 font-medium">{{ store.error }}</div>
@@ -196,23 +212,41 @@
   const filteredTransactions = computed(() => {
     return store.historyTransactions.filter((txn) => {
       const matchesType = typeFilter.value === "all" || txn.type === typeFilter.value;
-      // Search now checks both category and note
       const searchString = `${txn.category} ${txn.note || ""}`.toLowerCase();
       const matchesSearch = searchString.includes(searchQuery.value.toLowerCase().trim());
       return matchesType && matchesSearch;
     });
   });
 
+  // Watch for dropdown changes to auto-fetch standard ranges
   watch(
     () => store.historyRange,
-    () => {
-      store.fetchHistory();
+    (newVal) => {
+      // Only auto-fetch if it's a preset. Let the "Apply" button handle custom ranges.
+      if (newVal !== "custom") {
+        store.fetchHistory();
+      }
     },
   );
 
   onMounted(() => {
     store.fetchHistory();
   });
+
+  // Custom Range Validation & Fetch
+  function applyCustomRange() {
+    if (!store.customStartDate || !store.customEndDate) {
+      alert("Please select both a start and end date.");
+      return;
+    }
+
+    if (new Date(store.customEndDate) < new Date(store.customStartDate)) {
+      alert("End date cannot be before the start date.");
+      return;
+    }
+
+    store.fetchHistory();
+  }
 
   function startEditNote(txn) {
     editingNoteSk.value = txn.SK;
@@ -247,7 +281,6 @@
     if (filteredTransactions.value.length === 0) return;
 
     const exportData = filteredTransactions.value.map((txn) => ({
-      // Force English format for the Excel export
       Date: new Date(txn.timestamp).toLocaleDateString("en-US"),
       Category: txn.category,
       Type: txn.type.toUpperCase(),

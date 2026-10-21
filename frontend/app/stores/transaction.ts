@@ -23,6 +23,8 @@ export const useTransactionStore = defineStore("transaction", {
       error: null as string | null,
       selectedMonth: currentMonth,
       historyRange: "6m",
+      customStartDate: "", // New
+      customEndDate: "", // New
     };
   },
   getters: {
@@ -82,8 +84,16 @@ export const useTransactionStore = defineStore("transaction", {
 
       this.isLoading = true;
       this.error = null;
+
       try {
-        const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?range=${this.historyRange}`, {
+        let url = `${apiUrl}?range=${this.historyRange}`;
+
+        // If custom range is selected and dates are provided, use those instead
+        if (this.historyRange === "custom" && this.customStartDate && this.customEndDate) {
+          url = `${apiUrl}?startDate=${this.customStartDate}&endDate=${this.customEndDate}`;
+        }
+
+        const data = await $fetch<{ balance: number; transactions: Transaction[] }>(url, {
           headers: {
             Authorization: `Bearer ${authStore.token}`,
           },
