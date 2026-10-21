@@ -187,7 +187,7 @@
   async function fetchDashboardSettings() {
     try {
       const data = await $fetch(`${config.public.apiUrl}?entity=settings`, {
-        headers: { Authorization: `Bearer ${authStore.token}` },
+        headers: authStore.authHeaders,
       });
       if (data?.settings) {
         budgetLimit.value = Number(data.settings.budget_limit) || 0;

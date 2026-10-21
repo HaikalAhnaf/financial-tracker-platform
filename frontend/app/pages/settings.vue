@@ -326,7 +326,7 @@
   async function fetchReportSettings() {
     try {
       const data = await $fetch(`${config.public.apiUrl}?entity=settings`, {
-        headers: { Authorization: `Bearer ${authStore.token}` },
+        headers: authStore.authHeaders,
       });
       if (data?.settings) {
         reportsEnabled.value = !!data.settings.reports_enabled;
@@ -359,7 +359,7 @@
     try {
       await $fetch(`${config.public.apiUrl}?entity=settings`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${authStore.token}` },
+        headers: authStore.authHeaders,
         body: {
           reports_enabled: reportsEnabled.value,
           report_emails: reportEmails.value,
@@ -384,7 +384,7 @@
     try {
       const res = await $fetch(`${config.public.apiUrl}?entity=report`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${authStore.token}` },
+        headers: authStore.authHeaders,
       });
       reportStatusMsg.value = res.message || "Report sent successfully!";
     } catch (err) {

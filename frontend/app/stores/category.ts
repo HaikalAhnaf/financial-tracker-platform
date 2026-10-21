@@ -25,7 +25,7 @@ export const useCategoryStore = defineStore("category", {
 
       try {
         const data = await $fetch<{ categories: Category[] }>(`${config.public.apiUrl}?entity=category`, {
-          headers: { Authorization: `Bearer ${authStore.token}` },
+          headers: authStore.authHeaders,
         });
         this.categories = data.categories || [];
       } catch (err) {
@@ -40,7 +40,7 @@ export const useCategoryStore = defineStore("category", {
       try {
         await $fetch(`${config.public.apiUrl}?entity=category`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${authStore.token}` },
+          headers: authStore.authHeaders,
           body: { name, type },
         });
         await this.fetchCategories();
@@ -54,7 +54,7 @@ export const useCategoryStore = defineStore("category", {
       try {
         await $fetch(`${config.public.apiUrl}?entity=category`, {
           method: "DELETE",
-          headers: { Authorization: `Bearer ${authStore.token}` },
+          headers: authStore.authHeaders,
           body: { sk },
         });
         await this.fetchCategories();

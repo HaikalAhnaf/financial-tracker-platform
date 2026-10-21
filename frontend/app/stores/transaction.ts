@@ -64,9 +64,7 @@ export const useTransactionStore = defineStore("transaction", {
       this.error = null;
       try {
         const data = await $fetch<{ balance: number; transactions: Transaction[] }>(`${apiUrl}?month=${this.selectedMonth}`, {
-          headers: {
-            Authorization: `Bearer ${authStore.token}`,
-          },
+          headers: authStore.authHeaders,
         });
 
         this.serverBalance = data.balance || 0;
@@ -94,9 +92,7 @@ export const useTransactionStore = defineStore("transaction", {
         }
 
         const data = await $fetch<{ balance: number; transactions: Transaction[] }>(url, {
-          headers: {
-            Authorization: `Bearer ${authStore.token}`,
-          },
+          headers: authStore.authHeaders,
         });
         this.serverBalance = data.balance || 0;
         this.historyTransactions = (data.transactions || []).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -114,7 +110,7 @@ export const useTransactionStore = defineStore("transaction", {
       try {
         await $fetch(apiUrl, {
           method: "POST",
-          headers: { Authorization: `Bearer ${authStore.token}` },
+          headers: authStore.authHeaders,
           body: newTxn,
         });
         await this.fetchTransactions();
@@ -130,7 +126,7 @@ export const useTransactionStore = defineStore("transaction", {
       try {
         await $fetch(apiUrl, {
           method: "PUT",
-          headers: { Authorization: `Bearer ${authStore.token}` },
+          headers: authStore.authHeaders,
           body: { sk, note },
         });
         await this.fetchHistory();
@@ -146,7 +142,7 @@ export const useTransactionStore = defineStore("transaction", {
       try {
         await $fetch(apiUrl, {
           method: "DELETE",
-          headers: { Authorization: `Bearer ${authStore.token}` },
+          headers: authStore.authHeaders,
           body: { sk },
         });
         await this.fetchTransactions();

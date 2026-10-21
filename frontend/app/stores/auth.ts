@@ -5,14 +5,33 @@ export const useAuthStore = defineStore("auth", {
   state: () => ({
     token: null as string | null,
     user: null as { name: string; email: string } | null,
+    guestSession: null as string | null, // NEW: Tracks the temporary UUID
   }),
+  getters: {
+    // NEW: Centralized header generator for API calls
+    authHeaders(state) {
+      const headers: Record<string, string> = {};
+      if (state.token) {
+        headers["Authorization"] = `Bearer ${state.token}`;
+      }
+      if (state.guestSession) {
+        headers["X-Guest-Session"] = state.guestSession;
+      }
+      return headers;
+    },
+  },
   actions: {
     initAuth() {
       if (process.client) {
         const storedToken = localStorage.getItem("auth_token");
+        const storedGuestSession = localStorage.getItem("guest_session");
+
         if (storedToken) {
           this.token = storedToken;
           this.decodeToken(storedToken);
+        }
+        if (storedGuestSession) {
+          this.guestSession = storedGuestSession;
         }
       }
     },
@@ -23,17 +42,20 @@ export const useAuthStore = defineStore("auth", {
       }
       this.decodeToken(token);
     },
+    setGuestSession(sessionId: string) {
+      this.guestSession = sessionId;
+      if (process.client) {
+        localStorage.setItem("guest_session", sessionId);
+      }
+    },
     decodeToken(token: string) {
       try {
-        // Extract the payload (the second part of the JWT)
         const payloadPart = token.split(".")[1];
 
-        // Explicitly check if it exists so TypeScript knows it is definitely a string
         if (!payloadPart) {
           throw new Error("Invalid JWT format");
         }
 
-        // Now TypeScript is happy because payloadPart is guaranteed to be a string
         const payload = JSON.parse(atob(payloadPart));
 
         this.user = {
@@ -41,17 +63,19 @@ export const useAuthStore = defineStore("auth", {
           email: payload.email || "",
         };
       } catch (e) {
-        this.logout(); // If the token is invalid or tampered with, force a logout
+        this.logout();
       }
     },
     logout() {
       this.token = null;
       this.user = null;
+      this.guestSession = null;
+
       if (process.client) {
         localStorage.removeItem("auth_token");
+        localStorage.removeItem("guest_session");
       }
 
-      // Use Nuxt's global navigation helper instead of useRouter
       navigateTo("/login");
     },
   },
