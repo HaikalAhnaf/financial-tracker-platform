@@ -110,6 +110,9 @@ def process_automated_reports():
     return {"statusCode": 200, "body": "Automated reports processed"}
 
 def generate_and_send_report(user_id, user_email, is_automated=False):
+    if user_id.startswith("GUEST#"):
+        return build_response(403, {"error": "Manual reports are disabled for guest accounts to prevent spam."})
+
     response = table.get_item(Key={'PK': user_id, 'SK': 'SETTINGS'})
     settings = response.get('Item', {})
     emails_to_send = settings.get('report_emails', [user_email])
